@@ -63,6 +63,8 @@ Alembic files are parsed in the browser: the `AbcGeom_Xform_v3` op chain and the
 - Field of view comes from the focal length and the film aperture, exactly as `AbcGeom` computes it.
 - Alembic cameras look down their local -Z axis, so imported poses match Maya and Houdini.
 
+Each camera becomes a named camera set. The picker in the top left of the viewport switches between the free camera and those sets (`K` cycles through them): picking a set looks through it, which locks viewport navigation so the shot camera stays exactly where its animation puts it, and leaves the free camera where it was. The timeline only drives the set being looked through, while key editing always targets the selected set.
+
 The parser is validated against the official readers in Maya (`mayapy`) and Houdini (`hython`) during development. Neither tool is required to build or run the editor.
 
 ## Localizing the SuperSplat Editor

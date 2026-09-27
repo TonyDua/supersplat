@@ -88,6 +88,10 @@ class Camera extends Element {
 
     controlMode: 'orbit' | 'fly' = 'orbit';
 
+    // set while the viewport is looking through a camera set: input is ignored
+    // so the shot camera stays exactly where its animation puts it
+    locked = false;
+
     // during fly-mode look, stores the camera position that must stay fixed
     // while the azim/elev tween smoothly converges
     lookCameraPos: Vec3 | null = null;

@@ -1352,6 +1352,12 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         scene.camera.setPose(pose.position, pose.target, speed);
     });
 
+    // looking through a camera set locks navigation, so the shot camera stays
+    // exactly where its animation puts it
+    events.on('camera.sets', (state: { lookThrough: boolean }) => {
+        scene.camera.locked = state.lookThrough;
+    });
+
     // hack: fire events to initialize UI
     events.fire('camera.fov', scene.camera.fov);
     events.fire('view.bands', viewBands);

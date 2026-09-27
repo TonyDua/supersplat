@@ -21,10 +21,15 @@ const TARGET_DISTANCE = 10;
 // fallback when a file is not uniformly sampled and carries no frame rate
 const DEFAULT_FRAME_RATE = 24;
 
+/** One camera of an archive: the name shown in the picker and its poses. */
+type AbcCameraSet = {
+    name: string,
+    poses: Pose[]
+};
+
 type AbcCameraImport = {
-    poses: Pose[];
+    cameras: AbcCameraSet[];
     frameRate: number;
-    cameraName: string;
 };
 
 /**
@@ -114,71 +119,92 @@ const collectCameras = (parents: WeakMap<AbcObject, AbcObject>, object: AbcObjec
 };
 
 /**
- * Read the first camera of an archive as editor poses, one per sample.
+ * Display name for a camera: its own object name, or the parent transform's
+ * when the camera is a maya style `...Shape` child.
+ */
+const asCameraName = (object: AbcObject, parents: WeakMap<AbcObject, AbcObject>) => {
+    const parent = parents.get(object);
+    return object.name.endsWith('Shape') && parent ? parent.name : object.name;
+};
+
+/**
+ * Read every camera of an archive as editor poses, one per sample.
  *
  * Sample times become frames starting at zero, at the frame rate of the file's
  * uniform time sampling, so playback matches the original shot length.
  * Non-uniform files fall back to 24 fps.
  */
-const importAbcCamera = (buffer: ArrayBuffer): AbcCameraImport => {
+const importAbcCameras = (buffer: ArrayBuffer): AbcCameraImport => {
     const archive = AbcArchive.open(buffer);
     const parents = new WeakMap<AbcObject, AbcObject>();
-    const cameras = collectCameras(parents, archive.top, []);
-    if (cameras.length === 0) {
+    const cameraObjects = collectCameras(parents, archive.top, []);
+    if (cameraObjects.length === 0) {
         throw new AbcNoCameraError();
     }
 
-    const cameraObject = cameras[0];
-    const camera = asCamera(cameraObject)!;
-
-    // the animated transform is the camera's own or its nearest parent that has
-    // one, and its time sampling defines the frames
-    let driver = asXform(cameraObject);
-    for (let node = parents.get(cameraObject) ?? null; !driver && node; node = parents.get(node) ?? null) {
-        const xform = asXform(node);
-        if (xform && xform.numSamples > 0) {
-            driver = xform;
+    // the camera's own transform drives the samples, or its nearest parent that
+    // has one when the transform sits above the camera shape
+    const driverOf = (object: AbcObject) => {
+        let driver = asXform(object);
+        for (let node = parents.get(object) ?? null; !driver && node; node = parents.get(node) ?? null) {
+            const xform = asXform(node);
+            if (xform && xform.numSamples > 0) {
+                driver = xform;
+            }
         }
-    }
+        return driver;
+    };
 
-    if (!driver || driver.numSamples === 0) {
+    const drivers = cameraObjects.map(driverOf);
+    if (drivers.every(driver => !driver || driver.numSamples === 0)) {
         throw new Error('abc: the camera has no animated transform');
     }
 
-    const uniform = driver.timeSampling.numSamplesPerCycle === 1 && driver.timeSampling.timePerCycle > 0;
-    const frameRate = uniform ? 1 / driver.timeSampling.timePerCycle : DEFAULT_FRAME_RATE;
-    const startTime = driver.timeSampling.timeOfSample(0);
+    // every camera in a shot shares its time base, so the first one that
+    // animates defines both the frame rate and the frame numbering
+    const first = drivers.find(driver => driver && driver.numSamples > 0)!;
+    const uniform = first.timeSampling.numSamplesPerCycle === 1 && first.timeSampling.timePerCycle > 0;
+    const frameRate = uniform ? 1 / first.timeSampling.timePerCycle : DEFAULT_FRAME_RATE;
+    const startTime = first.timeSampling.timeOfSample(0);
 
-    const poses: Pose[] = [];
-    for (let i = 0; i < driver.numSamples; ++i) {
-        const time = driver.timeSampling.timeOfSample(i);
-        const matrix = worldMatrixAt(parents, cameraObject, time);
+    const cameras = cameraObjects.map((cameraObject, index) => {
+        const camera = asCamera(cameraObject)!;
+        const driver = drivers[index] && drivers[index]!.numSamples > 0 ? drivers[index]! : first;
 
-        const position = new Vec3(matrix[12], matrix[13], matrix[14]);
-        // the lens looks down the local -Z axis, which is the negation of the
-        // third row of the row vector rotation block
-        const forward = new Vec3(-matrix[8], -matrix[9], -matrix[10]).normalize();
+        const poses: Pose[] = [];
+        for (let i = 0; i < driver.numSamples; ++i) {
+            const time = driver.timeSampling.timeOfSample(i);
+            const matrix = worldMatrixAt(parents, cameraObject, time);
 
-        const frame = Math.max(0, Math.round((time - startTime) * frameRate));
-        const fov = camera.fieldOfViewAt(sampleIndexAt(camera, time));
+            const position = new Vec3(matrix[12], matrix[13], matrix[14]);
+            // the lens looks down the local -Z axis, which is the negation of
+            // the third row of the row vector rotation block
+            const forward = new Vec3(-matrix[8], -matrix[9], -matrix[10]).normalize();
 
-        poses.push({
-            name: `${cameraObject.name}@${frame}`,
-            frame,
-            position,
-            target: position.clone().add(forward.mulScalar(TARGET_DISTANCE)),
-            fov: fov ?? undefined
-        });
-    }
+            const frame = Math.max(0, Math.round((time - startTime) * frameRate));
+            const fov = camera.fieldOfViewAt(sampleIndexAt(camera, time));
 
-    // a repeated frame would overwrite its predecessor on the timeline
-    const unique = poses.filter((pose, i) => i === 0 || pose.frame !== poses[i - 1].frame);
+            poses.push({
+                name: `${cameraObject.name}@${frame}`,
+                frame,
+                position,
+                target: position.clone().add(forward.mulScalar(TARGET_DISTANCE)),
+                fov: fov ?? undefined
+            });
+        }
 
-    return {
-        poses: unique,
-        frameRate,
-        cameraName: cameraObject.name
-    };
+        // a repeated frame would overwrite its predecessor on the timeline
+        const unique = poses.filter((pose, i) => i === 0 || pose.frame !== poses[i - 1].frame);
+
+        return {
+            // maya writes the camera node and a `...Shape` child; the node name
+            // is the one an artist recognises
+            name: asCameraName(cameraObject, parents),
+            poses: unique
+        };
+    });
+
+    return { cameras, frameRate };
 };
 
-export { importAbcCamera, AbcCameraImport, AbcNoCameraError };
+export { importAbcCameras, AbcCameraImport, AbcNoCameraError };

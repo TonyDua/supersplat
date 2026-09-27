@@ -1,6 +1,6 @@
 import { path, Quat, Vec3 } from 'playcanvas';
 
-import { AbcNoCameraError, importAbcCamera } from './abc/camera-import';
+import { AbcNoCameraError, importAbcCameras } from './abc/camera-import';
 import type { Pose } from './camera-poses';
 import { CreateDropHandler, resolveHandleFiles } from './drop-handler';
 import { ElementType } from './element';
@@ -194,18 +194,20 @@ const resolveContents = async (file: ImportFile) => {
     return response.blob();
 };
 
-// load an alembic camera animation
-const loadAbcCamera = async (file: ImportFile, events: Events) => {
+// load an alembic camera animation, one set per camera in the file
+const loadAbcCameras = async (file: ImportFile, events: Events) => {
     const contents = await resolveContents(file);
-    const { poses, frameRate } = importAbcCamera(await contents.arrayBuffer());
+    const { cameras, frameRate } = importAbcCameras(await contents.arrayBuffer());
 
     // the timeline has to cover every pose: poses beyond its end are dropped
-    // when the camera track rebuilds its curve, and the rate keeps playback at
+    // when a camera track rebuilds its curve, and the rate keeps playback at
     // the length of the original shot
-    const endFrame = poses.reduce((max, pose) => Math.max(max, pose.frame), 0);
+    const endFrame = cameras.reduce((max, camera) => {
+        return camera.poses.reduce((end, pose) => Math.max(end, pose.frame), max);
+    }, 0);
     events.fire('timeline.setFrameRate', frameRate);
     events.fire('timeline.setFrames', endFrame + 1);
-    events.fire('camera.loadPoses', poses);
+    events.fire('camera.loadSets', cameras);
     events.fire('timeline.frame', 0);
 };
 
@@ -414,7 +416,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         } else if (filename.endsWith('.json')) {
                             await loadCameraPoses(files[i], events);
                         } else {
-                            await loadAbcCamera(files[i], events);
+                            await loadAbcCameras(files[i], events);
                         }
                     } catch (error) {
                         const message = error instanceof AbcNoCameraError ?

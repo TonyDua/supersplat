@@ -69,6 +69,9 @@ class PointerController {
         let midx: number, midy: number, midlen: number;
 
         const pointerdown = (event: PointerEvent) => {
+            if (camera.locked) {
+                return;
+            }
             if (event.pointerType === 'mouse') {
                 // If a button is already pressed, ignore this press
                 if (pressedButton !== -1) {
@@ -124,6 +127,9 @@ class PointerController {
         };
 
         const pointermove = (event: PointerEvent) => {
+            if (camera.locked) {
+                return;
+            }
             if (event.pointerType === 'mouse') {
                 // Only process if we're tracking a button
                 if (pressedButton === -1) {
@@ -276,6 +282,9 @@ class PointerController {
         };
 
         const wheel = (event: WheelEvent) => {
+            if (camera.locked) {
+                return;
+            }
             const { deltaX, deltaY } = event;
 
             // Some browsers (notably Safari/Firefox on macOS) remap a vertical
@@ -326,6 +335,9 @@ class PointerController {
         const canvas = camera.scene.app.graphicsDevice.canvas;
 
         const dblclick = (event: globalThis.MouseEvent) => {
+            if (camera.locked) {
+                return;
+            }
             if (event.target === target || event.target === canvas) {
                 // Switch to orbit mode when double-clicking to focus
                 if (camera.controlMode === 'fly') {
@@ -362,6 +374,9 @@ class PointerController {
 
         // Helper to switch to fly mode when a fly key is pressed
         const handleFlyKey = (down: boolean) => {
+            if (camera.locked) {
+                return;
+            }
             if (down && camera.controlMode !== 'fly') {
                 camera.scene.events.fire('camera.setControlMode', 'fly');
             }
@@ -411,7 +426,7 @@ class PointerController {
         events.on('camera.modifier.slow', onModifierSlow);
 
         this.update = (deltaTime: number) => {
-            if (camera.controlMode !== 'fly') return;
+            if (camera.locked || camera.controlMode !== 'fly') return;
 
             // Fly mode: WASD for movement, Q/E for up/down - moves focal point
             const forward = (flyForward ? 1 : 0) - (flyBackward ? 1 : 0);

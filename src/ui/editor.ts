@@ -9,6 +9,7 @@ import type { BlobReadSource } from '../io';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
+import { CameraPicker } from './camera-picker';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
@@ -114,6 +115,7 @@ class EditorUI {
         const rightToolbar = new RightToolbar(events, tooltips);
         const menu = new Menu(events);
         const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
+        const cameraPicker = new CameraPicker(events, tooltips);
         const perfOverlay = new PerfOverlay(events);
         const overdrawLegend = new OverdrawLegend(events);
 
@@ -121,6 +123,7 @@ class EditorUI {
         canvasContainer.append(annotationContainer);
         canvasContainer.append(appLabel);
         canvasContainer.append(cameraInfoOverlay);
+        canvasContainer.append(cameraPicker);
         canvasContainer.append(perfOverlay);
         canvasContainer.append(overdrawLegend);
         canvasContainer.append(toolsContainer);

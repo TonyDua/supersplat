@@ -29,7 +29,8 @@ const popupConfig: Record<string, CategoryConfig> = {
         shortcuts: [
             { id: 'camera.reset', localeKey: 'popup.shortcuts.reset-camera' },
             { id: 'camera.focus', localeKey: 'popup.shortcuts.focus-camera' },
-            { id: 'camera.toggleControlMode', localeKey: 'popup.shortcuts.toggle-control-mode' }
+            { id: 'camera.toggleControlMode', localeKey: 'popup.shortcuts.toggle-control-mode' },
+            { id: 'camera.cycleSets', localeKey: 'popup.shortcuts.cycle-cameras' }
         ]
     },
     camera: {

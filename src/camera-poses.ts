@@ -13,13 +13,43 @@ type Pose = {
 };
 
 /**
+ * A named camera: one animation track plus the label the viewport picker
+ * shows. A file may hold several cameras, so importing creates one set each.
+ */
+type CameraSet = {
+    name: string,
+    track: CameraAnimTrack
+};
+
+/** The viewport camera pose, as reported by `camera.getPose`. */
+type View = {
+    position: Vec3,
+    target: Vec3,
+    fov?: number
+};
+
+/** What the viewport picker needs to render the camera list. */
+type CameraSets = {
+    /** Set names, in picker order. */
+    names: string[],
+    /** Index of the set key editing targets, -1 when there are none. */
+    active: number,
+    /** Whether the viewport is looking through the active set. */
+    lookThrough: boolean
+};
+
+/**
  * Camera animation track that manages camera keyframes and interpolation.
  * Implements AnimTrack interface so it can be used with the timeline system.
  *
- * Fully self-contained: subscribes to timeline events internally for
- * evaluation and spline rebuilding.
+ * A track only drives the viewport camera while it is the set being looked
+ * through. Every other set keeps its curve up to date so switching is instant,
+ * but leaves the viewport alone.
  */
 class CameraAnimTrack implements AnimTrack {
+    /** True while this set is the one the viewport is looking through. */
+    active = false;
+
     private poses: Pose[] = [];
     private events: Events;
     private onTimelineChange: ((frame: number) => void) | null = null;
@@ -27,16 +57,7 @@ class CameraAnimTrack implements AnimTrack {
     constructor(events: Events) {
         this.events = events;
 
-        // Evaluate on timeline playback and scrub
-        events.on('timeline.time', (time: number) => {
-            this.evaluate(time);
-        });
-
-        events.on('timeline.frame', (frame: number) => {
-            this.evaluate(frame);
-        });
-
-        // Rebuild spline when timeline parameters change
+        // Rebuild the curve when timeline parameters change
         events.on('timeline.frames', () => {
             this.rebuildSpline();
         });
@@ -47,11 +68,6 @@ class CameraAnimTrack implements AnimTrack {
 
         events.on('timeline.loop', () => {
             this.rebuildSpline();
-        });
-
-        // Clear track when scene is cleared
-        events.on('scene.clear', () => {
-            this.clear();
         });
     }
 
@@ -244,6 +260,7 @@ class CameraAnimTrack implements AnimTrack {
             const pose = { position: new Vec3(), target: new Vec3(), fov: 0 };
 
             this.onTimelineChange = (frame: number) => {
+                if (!this.active) return;
                 spline.evaluate(frame, result);
                 pose.position.set(result[0], result[1], result[2]);
                 pose.target.set(result[3], result[4], result[5]);
@@ -256,6 +273,7 @@ class CameraAnimTrack implements AnimTrack {
             const pose = { position: p.position.clone(), target: p.target.clone(), fov: p.fov };
 
             this.onTimelineChange = () => {
+                if (!this.active) return;
                 this.events.fire('camera.setPose', pose, 0);
             };
         } else {
@@ -268,40 +286,196 @@ class CameraAnimTrack implements AnimTrack {
 }
 
 /**
- * Register the camera animation track and expose it via events.
- * The track is fully self-contained (subscribes to timeline events internally),
- * so this function only needs to create it, expose it, and handle serialization.
+ * Register the camera sets and expose them via events.
+ *
+ * The editor has one free camera and any number of imported or hand keyed
+ * camera sets. Only the set the viewport is looking through drives the camera,
+ * which is what keeps free navigation and shot cameras from fighting: with
+ * look-through off you can fly around while key editing still targets the
+ * selected set.
  */
 const registerCameraPosesEvents = (events: Events) => {
-    const track = new CameraAnimTrack(events);
+    const sets: CameraSet[] = [];
 
-    // Expose the camera animation track
+    // index of the set that key editing targets, -1 when there are none
+    let activeIndex = -1;
+
+    // whether the viewport is looking through the active set
+    let lookThrough = false;
+
+    // the free camera pose captured when look-through began, restored on exit
+    let freeView: View | null = null;
+
+    const activeTrack = () => {
+        return activeIndex >= 0 && activeIndex < sets.length ? sets[activeIndex].track : null;
+    };
+
+    const updateActivation = () => {
+        sets.forEach((set, i) => {
+            set.track.active = lookThrough && i === activeIndex;
+        });
+    };
+
+    const notify = () => {
+        events.fire('camera.sets', {
+            names: sets.map(set => set.name),
+            active: activeIndex,
+            lookThrough
+        } satisfies CameraSets);
+    };
+
+    // drive the viewport camera from the active set at the current frame
+    const applyActivePose = () => {
+        activeTrack()?.evaluate(events.invoke('timeline.frame') as number);
+    };
+
+    // only the set being looked through follows playback and scrubbing
+    const onTimelineChange = (frame: number) => {
+        if (lookThrough) {
+            activeTrack()?.evaluate(frame);
+        }
+    };
+
+    events.on('timeline.frame', onTimelineChange);
+    events.on('timeline.time', onTimelineChange);
+
+    // a label the picker can show without duplicates
+    const uniqueName = (name: string, taken: Set<string>) => {
+        const base = name || 'camera';
+        let candidate = base;
+        for (let suffix = 2; taken.has(candidate); ++suffix) {
+            candidate = `${base} ${suffix}`;
+        }
+        return candidate;
+    };
+
+    /**
+     * Replace every set. Imported cameras take over the viewport so that an
+     * import behaves like the single camera track it replaces; loading a
+     * document keeps the free view it restored instead.
+     */
+    const loadSets = (incoming: Array<{ name: string, poses: Pose[] }>, lookThroughFirst: boolean) => {
+        sets.length = 0;
+        const taken = new Set<string>();
+        incoming.forEach((entry) => {
+            const track = new CameraAnimTrack(events);
+            track.loadPoses(entry.poses);
+            const name = uniqueName(entry.name, taken);
+            taken.add(name);
+            sets.push({ name, track });
+        });
+
+        if (lookThroughFirst && sets.length > 0) {
+            // remember where the free camera was before a camera takes over
+            freeView = lookThrough ? freeView : events.invoke('camera.getPose') as View;
+            activeIndex = 0;
+            lookThrough = true;
+        } else {
+            activeIndex = sets.length > 0 ? 0 : -1;
+            lookThrough = false;
+        }
+
+        updateActivation();
+        if (lookThrough) {
+            applyActivePose();
+        }
+
+        events.fire('track.keysLoaded');
+        notify();
+    };
+
+    // the track the timeline and key editing work on
     events.function('camera.animTrack', () => {
-        return track;
+        return activeTrack();
     });
 
-    // expose poses
     events.function('camera.poses', () => {
-        return track.getPoses();
+        return activeTrack()?.getPoses() ?? [];
     });
 
+    events.function('camera.sets', () => {
+        return {
+            names: sets.map(set => set.name),
+            active: activeIndex,
+            lookThrough
+        };
+    });
+
+    // the single camera formats (inria json, colmap images.txt) import one set
     events.on('camera.loadPoses', (poses: Pose[]) => {
-        track.loadPoses(poses);
+        loadSets([{ name: 'camera', poses }], true);
+    });
+
+    // an alembic file can hold several cameras, one set each
+    events.on('camera.loadSets', (incoming: Array<{ name: string, poses: Pose[] }>) => {
+        loadSets(incoming, true);
+    });
+
+    // selecting a set looks through it; -1 returns to the free camera, which
+    // only changes the view - key editing keeps targeting the selected set
+    events.on('camera.setActiveSet', (index: number) => {
+        const next = index >= 0 && index < sets.length ? index : -1;
+        const nextLookThrough = next >= 0;
+
+        if (nextLookThrough === lookThrough && next === activeIndex) {
+            return;
+        }
+
+        if (nextLookThrough && !lookThrough) {
+            freeView = events.invoke('camera.getPose') as View;
+        }
+
+        if (next >= 0) {
+            activeIndex = next;
+        }
+        lookThrough = nextLookThrough;
+        updateActivation();
+
+        if (lookThrough) {
+            applyActivePose();
+            // the timeline shows the keys of the set that is now selected
+            events.fire('track.keysLoaded');
+        } else if (freeView) {
+            events.fire('camera.setPose', {
+                position: new Vec3(freeView.position.x, freeView.position.y, freeView.position.z),
+                target: new Vec3(freeView.target.x, freeView.target.y, freeView.target.z),
+                fov: freeView.fov
+            }, 0);
+            freeView = null;
+        }
+
+        notify();
+    });
+
+    // free camera -> each set -> free camera
+    events.on('camera.cycleSets', () => {
+        if (sets.length === 0) {
+            return;
+        }
+        const current = lookThrough ? activeIndex : -1;
+        const next = current + 1;
+        events.fire('camera.setActiveSet', next < sets.length ? next : -1);
+    });
+
+    events.on('scene.clear', () => {
+        sets.length = 0;
+        activeIndex = -1;
+        lookThrough = false;
+        freeView = null;
+        events.fire('track.keysCleared');
+        notify();
     });
 
     // Serialization
 
     events.function('docSerialize.poseSets', (): any[] => {
         const pack3 = (v: Vec3) => [v.x, v.y, v.z];
-        const poses = track.getPoses();
 
-        if (poses.length === 0) {
-            return [];
-        }
-
-        return [{
-            name: 'set0',
-            poses: poses.map((pose) => {
+        return sets
+        .filter(set => set.track.getPoses().length > 0)
+        .map(set => ({
+            name: set.name,
+            poses: set.track.getPoses().map((pose) => {
                 return {
                     name: pose.name,
                     frame: pose.frame,
@@ -310,7 +484,7 @@ const registerCameraPosesEvents = (events: Events) => {
                     fov: pose.fov
                 };
             })
-        }];
+        }));
     });
 
     events.function('docDeserialize.poseSets', (poseSets: any[], documentCameraFov?: number) => {
@@ -319,21 +493,27 @@ const registerCameraPosesEvents = (events: Events) => {
         }
 
         const fps = events.invoke('timeline.frameRate');
-
         const defaultFov = documentCameraFov ?? events.invoke('camera.fov') ?? 60;
 
-        const loadedPoses: Pose[] = poseSets[0].poses.map((docPose: any, index: number) => {
+        const loaded = poseSets.map((set: any) => {
             return {
-                name: docPose.name,
-                frame: docPose.frame ?? (index * fps),
-                position: new Vec3(docPose.position),
-                target: new Vec3(docPose.target),
-                fov: docPose.fov ?? defaultFov
+                name: set.name ?? 'camera',
+                poses: (set.poses ?? []).map((docPose: any, index: number) => {
+                    return {
+                        name: docPose.name,
+                        frame: docPose.frame ?? (index * fps),
+                        position: new Vec3(docPose.position),
+                        target: new Vec3(docPose.target),
+                        fov: docPose.fov ?? defaultFov
+                    };
+                })
             };
         });
 
-        track.loadPoses(loadedPoses);
+        // the document also restores its saved view, so do not look through a
+        // camera on load - the picker is one click away
+        loadSets(loaded, false);
     });
 };
 
-export { registerCameraPosesEvents, CameraAnimTrack, Pose };
+export { registerCameraPosesEvents, CameraAnimTrack, Pose, CameraSets };
