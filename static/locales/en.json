@@ -170,6 +170,7 @@
     "popup.no": "No",
     "popup.error": "Error",
     "popup.error-loading": "Error Loading File",
+    "popup.error-no-camera": "No Camera Found",
     "popup.webgpu-unavailable": "This export requires WebGPU, which is not available in this browser. Please try a recent version of Chrome, Edge or Safari.",
     "popup.overwrite-source": "This file is in use by the current scene and can't be overwritten. Choose a different filename.",
     "popup.save-as": "Save As",

@@ -170,6 +170,7 @@
     "popup.no": "Нет",
     "popup.error": "Ошибка",
     "popup.error-loading": "Ошибка загрузки файла",
+    "popup.error-no-camera": "Камера Не Найдена",
     "popup.webgpu-unavailable": "Для этого экспорта требуется WebGPU, который недоступен в этом браузере. Попробуйте последнюю версию Chrome, Edge или Safari.",
     "popup.overwrite-source": "Этот файл используется текущей сценой и не может быть перезаписан. Выберите другое имя файла.",
     "popup.save-as": "Сохранить как",

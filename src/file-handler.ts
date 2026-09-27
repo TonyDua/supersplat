@@ -1,5 +1,6 @@
 import { path, Quat, Vec3 } from 'playcanvas';
 
+import { AbcNoCameraError, importAbcCamera } from './abc/camera-import';
 import type { Pose } from './camera-poses';
 import { CreateDropHandler, resolveHandleFiles } from './drop-handler';
 import { ElementType } from './element';
@@ -68,6 +69,12 @@ const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
             'text/plain': ['.txt']
         }
     },
+    'abc': {
+        description: 'Alembic Camera File',
+        accept: {
+            'application/x-alembic': ['.abc']
+        }
+    },
     'htmlViewer': {
         description: 'Viewer HTML',
         accept: {
@@ -89,6 +96,7 @@ const allImportTypes = {
         'application/x-gaussian-splat': ['.json', '.sog', '.splat', '.ksplat', '.spz'],
         'image/webp': ['.webp'],
         'application/x-lcc': ['.lcc', '.lcc2', '.bin'],
+        'application/x-alembic': ['.abc'],
         'text/plain': ['.txt']
     }
 };
@@ -170,9 +178,40 @@ const recordImports = (files: ImportFile[]) => {
 
 const vec = new Vec3();
 
+// url imports carry no contents, but the camera importers read the file body
+// directly, so fetch it when only a url is available
+const resolveContents = async (file: ImportFile) => {
+    if (file.contents) {
+        return file.contents;
+    }
+    if (!file.url) {
+        throw new Error('no file contents');
+    }
+    const response = await fetch(file.url);
+    if (!response.ok) {
+        throw new Error(`http ${response.status} while fetching '${file.url}'`);
+    }
+    return response.blob();
+};
+
+// load an alembic camera animation
+const loadAbcCamera = async (file: ImportFile, events: Events) => {
+    const contents = await resolveContents(file);
+    const { poses, frameRate } = importAbcCamera(await contents.arrayBuffer());
+
+    // the timeline has to cover every pose: poses beyond its end are dropped
+    // when the camera track rebuilds its curve, and the rate keeps playback at
+    // the length of the original shot
+    const endFrame = poses.reduce((max, pose) => Math.max(max, pose.frame), 0);
+    events.fire('timeline.setFrameRate', frameRate);
+    events.fire('timeline.setFrames', endFrame + 1);
+    events.fire('camera.loadPoses', poses);
+    events.fire('timeline.frame', 0);
+};
+
 // load inria camera poses from json file
 const loadCameraPoses = async (file: ImportFile, events: Events) => {
-    const response = new Response(file.contents);
+    const response = new Response(await resolveContents(file));
     const json = await response.json();
 
     if (json.length > 0) {
@@ -222,7 +261,7 @@ const removeExtension = (filename: string) => {
 
 // https://colmap.github.io/format.html#images-txt
 const loadImagesTxt = async (file: ImportFile, events: Events) => {
-    const response = new Response(file.contents);
+    const response = new Response(await resolveContents(file));
     const text = await response.text();
 
     // split into lines, remove comments and empty lines
@@ -345,7 +384,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz'].every(ext => !filename.endsWith(ext))) {
+                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.abc', '.ksplat', '.spz'].every(ext => !filename.endsWith(ext))) {
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }
@@ -365,12 +404,23 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     // load gaussian splat model
                     const model = await importSplatModel([files[i]], animationFrame);
                     if (model) result.push(model);
-                } else if (filename.endsWith('images.txt')) {
-                    // load colmap frames
-                    await loadImagesTxt(files[i], events);
-                } else if (filename.endsWith('.json')) {
-                    // load inria camera poses
-                    await loadCameraPoses(files[i], events);
+                } else if (['images.txt', '.json', '.abc'].some(ext => filename.endsWith(ext))) {
+                    // load camera data: colmap frames, inria poses or an
+                    // alembic camera animation. these read the file directly,
+                    // so failures surface here rather than in the splat loader
+                    try {
+                        if (filename.endsWith('images.txt')) {
+                            await loadImagesTxt(files[i], events);
+                        } else if (filename.endsWith('.json')) {
+                            await loadCameraPoses(files[i], events);
+                        } else {
+                            await loadAbcCamera(files[i], events);
+                        }
+                    } catch (error) {
+                        const message = error instanceof AbcNoCameraError ?
+                            i18n.t('popup.error-no-camera') : (error.message ?? error);
+                        await showLoadError(message, files[i].filename);
+                    }
                 }
             }
         }
@@ -392,7 +442,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.abc');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -490,7 +540,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         filePickerTypes.lcc,
                         filePickerTypes.ksplat,
                         filePickerTypes.spz,
-                        filePickerTypes.indexTxt
+                        filePickerTypes.indexTxt,
+                        filePickerTypes.abc
                     ]
                 });
 

@@ -46,6 +46,25 @@ To initialize a local development environment for SuperSplat, ensure you have [N
 
 When changes to the source are detected, SuperSplat is rebuilt automatically. Simply refresh your browser to see your changes.
 
+## Camera Animation Import
+
+Camera animation can be imported and edited as timeline keyframes, shown with the camera poses overlay, and rendered or published as a viewer animation track.
+
+| Format | Notes |
+| --- | --- |
+| Alembic (`.abc`) | Cameras only. Ogawa based archives (Alembic 1.6 and later); HDF5 based archives are rejected. |
+| INRIA / gsplat `cameras.json` | Array of entries with `position`, `rotation` and optional `fx`, `fy`, `width`, `height`. |
+| COLMAP `images.txt` | Standard COLMAP camera list. |
+
+Alembic files are parsed in the browser: the `AbcGeom_Xform_v3` op chain and the `AbcGeom_Camera_v1` lens parameters are read directly, following the conventions of the official readers.
+
+- Sample times become frames starting at frame 0, at the frame rate of the file's uniform time sampling (24 fps for files that are not uniformly sampled). The timeline is extended to cover every pose.
+- A camera's world transform is the chain of its ancestor transforms, stopping at any transform that does not inherit.
+- Field of view comes from the focal length and the film aperture, exactly as `AbcGeom` computes it.
+- Alembic cameras look down their local -Z axis, so imported poses match Maya and Houdini.
+
+The parser is validated against the official readers in Maya (`mayapy`) and Houdini (`hython`) during development. Neither tool is required to build or run the editor.
+
 ## Localizing the SuperSplat Editor
 
 The currently supported languages are available here:

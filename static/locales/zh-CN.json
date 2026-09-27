@@ -170,6 +170,7 @@
     "popup.no": "否",
     "popup.error": "错误",
     "popup.error-loading": "加载文件错误",
+    "popup.error-no-camera": "未找到相机",
     "popup.webgpu-unavailable": "此导出需要 WebGPU，但当前浏览器不支持。请尝试使用最新版本的 Chrome、Edge 或 Safari。",
     "popup.overwrite-source": "该文件正被当前场景使用，无法覆盖。请选择其他文件名。",
     "popup.save-as": "另存为",
