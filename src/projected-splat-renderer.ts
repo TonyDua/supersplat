@@ -55,6 +55,7 @@ import { projectedSplatProjector } from './shaders/projected-splat-projector-sha
 import { fragmentShader, vertexShader } from './shaders/projected-splat-shader';
 import { fragmentShader as centersFragmentShader, vertexShader as centersVertexShader } from './shaders/splat-centers-shader';
 import type { Splat } from './splat';
+import type { ViewportEffects } from './viewport-effects';
 
 const INSTANCE_SIZE = 128;
 const WORKGROUP_SIZE = 256;
@@ -468,6 +469,9 @@ class ProjectedSplatRenderer {
             new UniformFormat('cameraPosition', UNIFORMTYPE_VEC3),
             new UniformFormat('previewMode', UNIFORMTYPE_UINT),
             new UniformFormat('colorAlpha', UNIFORMTYPE_FLOAT),
+            new UniformFormat('effectScale', UNIFORMTYPE_VEC4),
+            new UniformFormat('effectOpacityVariation', UNIFORMTYPE_FLOAT),
+            new UniformFormat('effectSeed', UNIFORMTYPE_UINT),
             new UniformFormat('colorRow0', UNIFORMTYPE_VEC4),
             new UniformFormat('colorRow1', UNIFORMTYPE_VEC4),
             new UniformFormat('colorRow2', UNIFORMTYPE_VEC4),
@@ -874,6 +878,8 @@ class ProjectedSplatRenderer {
         // Packed once per frame: it is the same for every placement, only the
         // preview mode differs.
         const pending = events.invoke('colorPanel.pending') as GradeParams;
+        const effects = events.invoke('viewportEffects') as ViewportEffects;
+        const showEffects = !forPick && !camera.targetSizeOverride;
         const outlineSelection = events.invoke('view.outlineSelection') || !!pending;
         if (pending) {
             gradeRows(gradeTerms(pending, this.previewTerms), this.previewRows);
@@ -960,6 +966,14 @@ class ProjectedSplatRenderer {
             compute.setParameter('cameraPosition', [cameraPosition.x, cameraPosition.y, cameraPosition.z]);
             compute.setParameter('previewMode', previewMode);
             compute.setParameter('colorAlpha', previewMode ? this.previewTerms.transparency : 1);
+            compute.setParameter('effectScale', showEffects ? [
+                effects.size * effects.scaleX,
+                effects.size * effects.scaleY,
+                effects.size,
+                0
+            ] : [1, 1, 1, 0]);
+            compute.setParameter('effectOpacityVariation', showEffects ? effects.opacityVariation : 0);
+            compute.setParameter('effectSeed', showEffects ? effects.seed : 0);
             compute.setParameter('colorRow0', this.previewRows.subarray(0, 4));
             compute.setParameter('colorRow1', this.previewRows.subarray(4, 8));
             compute.setParameter('colorRow2', this.previewRows.subarray(8, 12));

@@ -6,6 +6,7 @@
 @use 'menu.scss';
 @use 'scene-panel.scss';
 @use 'settings-panel.scss';
+@use 'effects-panel.scss';
 @use 'color-panel.scss';
 @use 'splat-list.scss';
 @use 'transform.scss';
@@ -190,14 +191,17 @@ body {
     bottom: 176px;
 }
 
-// viewport camera picker: the free camera or one of the imported cameras
+// viewport camera picker beside the orientation cube
 #camera-picker {
     position: absolute;
-    left: 12px;
-    top: 12px;
-    width: 210px;
+    right: 148px;
+    top: 48px;
+    width: 190px;
     pointer-events: auto;
-    text-shadow: 1px 1px 4px black;
+    padding: 4px;
+    border-radius: 6px;
+    background: $bcg-dark;
+    z-index: 2;
 
     .camera-picker-select {
         width: 100%;

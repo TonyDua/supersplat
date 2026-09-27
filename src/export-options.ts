@@ -73,10 +73,11 @@ const buildViewerSettings = (events: Events, choices: ExportChoices): ViewerExpo
 
     if (choices.includeAnimation) {
         const frames = events.invoke('timeline.frames');
+        const startFrame = events.invoke('timeline.startFrame');
         const frameRate = events.invoke('timeline.frameRate');
         const smoothness = events.invoke('timeline.smoothness');
         const orderedPoses = (events.invoke('camera.poses') as Pose[])
-        .filter(entry => entry.frame >= 0 && entry.frame < frames)
+        .filter(entry => entry.frame >= startFrame && entry.frame < startFrame + frames)
         .sort((a, b) => a.frame - b.frame);
 
         if (orderedPoses.length > 0) {
@@ -86,7 +87,7 @@ const buildViewerSettings = (events: Events, choices: ExportChoices): ViewerExpo
             const fovKeys: number[] = [];
             for (let i = 0; i < orderedPoses.length; ++i) {
                 const op = orderedPoses[i];
-                times.push(op.frame);
+                times.push(op.frame - startFrame);
                 position.push(op.position.x, op.position.y, op.position.z);
                 target.push(op.target.x, op.target.y, op.target.z);
                 fovKeys.push(op.fov ?? fov);

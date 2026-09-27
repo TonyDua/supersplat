@@ -413,6 +413,10 @@ class EditorSplatResource extends GSplatContainer {
         this.layerRefs++;
     }
 
+    get referenceCount() {
+        return this.layerRefs;
+    }
+
     // release a layer's interest. Returns true when the caller released the last
     // one and is therefore responsible for unloading the asset.
     release() {

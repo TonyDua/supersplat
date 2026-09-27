@@ -286,15 +286,16 @@ class VideoSettingsDialog extends Container {
         // frame range
 
         const totalFrames = events.invoke('timeline.frames');
+        const firstFrame = events.invoke('timeline.startFrame');
         const frameRangeLabel = new Label({ class: 'label' });
         i18n.bindText(frameRangeLabel, 'popup.render-video.frame-range');
         const frameRangeInput = new VectorInput({
             class: 'vector-input',
             dimensions: 2,
-            min: 0,
-            max: totalFrames - 1,
+            min: firstFrame,
+            max: firstFrame + totalFrames - 1,
             precision: 0,
-            value: [0, totalFrames - 1]
+            value: [firstFrame, firstFrame + totalFrames - 1]
         });
         i18n.onChange(() => {
             frameRangeInput.placeholder = [i18n.t('popup.render-video.frame-range-first'), i18n.t('popup.render-video.frame-range-last')];
@@ -667,8 +668,10 @@ class VideoSettingsDialog extends Container {
         // reset UI and configure for current state
         const reset = () => {
             const totalFrames = events.invoke('timeline.frames');
-            frameRangeInput.max = totalFrames - 1;
-            frameRangeInput.value = [0, totalFrames - 1];
+            const firstFrame = events.invoke('timeline.startFrame');
+            frameRangeInput.min = firstFrame;
+            frameRangeInput.max = firstFrame + totalFrames - 1;
+            frameRangeInput.value = [firstFrame, firstFrame + totalFrames - 1];
         };
 
         // function implementations

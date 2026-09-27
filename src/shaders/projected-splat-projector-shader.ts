@@ -108,6 +108,9 @@ struct ProjectorUniforms {
     // SplatsColorOp.forEachTarget.
     previewMode: u32,
     colorAlpha: f32,
+    effectScale: vec4f,
+    effectOpacityVariation: f32,
+    effectSeed: u32,
     // rows of the affine colour grade, see color-grade-chunk
     colorRow0: vec4f,
     colorRow1: vec4f,
@@ -187,6 +190,16 @@ ${overlayEligibleWGSL}
 ${compactTailWGSL}
 ${stochasticWarpWGSL}
 
+fn effectHash(value: u32) -> u32 {
+    var hash = value;
+    hash ^= hash >> 16u;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15u;
+    hash *= 0x846ca68bu;
+    hash ^= hash >> 16u;
+    return hash;
+}
+
 fn rotationMatrix(qIn: vec4f) -> mat3x3f {
     let q = normalize(qIn);
     let x = q.x;
@@ -258,9 +271,9 @@ fn main(
     let modelView = uniforms.view * model;
     let linear = mat3x3f(modelView[0].xyz, modelView[1].xyz, modelView[2].xyz);
     let gaussian = linear * rotationMatrix(rotation) * mat3x3f(
-        vec3f(b.x, 0.0, 0.0),
-        vec3f(0.0, b.y, 0.0),
-        vec3f(0.0, 0.0, b.z)
+        vec3f(b.x * uniforms.effectScale.x, 0.0, 0.0),
+        vec3f(0.0, b.y * uniforms.effectScale.y, 0.0),
+        vec3f(0.0, 0.0, b.z * uniforms.effectScale.z)
     );
     let row0 = vec3f(gaussian[0].x, gaussian[1].x, gaussian[2].x);
     let row1 = vec3f(gaussian[0].y, gaussian[1].y, gaussian[2].y);
@@ -420,6 +433,10 @@ fn main(
     var gradedAlpha = color.a * grade.alpha;
     if (previewed) {
         gradedAlpha *= uniforms.colorAlpha;
+    }
+    if (uniforms.effectOpacityVariation > 0.0) {
+        let random = f32(effectHash(sourceIndex ^ uniforms.effectSeed) >> 8u) * (1.0 / 16777216.0);
+        gradedAlpha *= mix(1.0, random, uniforms.effectOpacityVariation);
     }
     gradedAlpha = clamp(gradedAlpha, 0.0, 1.0);
     // stochastic frames also cull by contribution - the gaussian's alpha mass in

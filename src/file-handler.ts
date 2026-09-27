@@ -21,7 +21,7 @@ type FileType = 'ply' | 'compressedPly' | 'splat' | 'sog' | 'spz' | 'htmlViewer'
 
 const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
     'ply': {
-        description: 'Gaussian Splat PLY File',
+        description: 'PLY (Gaussian Splat or Point Cloud)',
         accept: {
             'application/ply': ['.ply']
         }
@@ -103,21 +103,39 @@ const allImportTypes = {
 
 // determine if all files share a common filename prefix followed by
 // a frame number, e.g. "frame0001.ply", "frame0002.ply", etc.
+const plyFrame = (filename: string) => {
+    const match = filename.toLowerCase().match(/\d+(\.compressed)?\.ply$/);
+    if (!match) return null;
+    const digits = match[0].match(/^\d+/)![0];
+    return { prefix: filename.slice(0, match.index), frame: Number(digits), compressed: !!match[1] };
+};
+
+const frameNumberFromName = (filename: string): number | undefined => {
+    const stem = filename.replace(/\.(?:exr|png|jpe?g|tiff?|bmp|webp)$/i, '');
+    const match = stem.match(/(\d+)$/);
+    return match ? Number(match[1]) : undefined;
+};
+
+const fitTimelineToPoses = (events: Events, poses: Pose[]) => {
+    if (poses.length === 0) return;
+    const start = poses.reduce((value, pose) => Math.min(value, pose.frame), Infinity);
+    const end = poses.reduce((value, pose) => Math.max(value, pose.frame), -Infinity);
+    events.fire('timeline.setInputRange', 'camera', { start, end });
+};
+
 const isPlySequence = (filenames: string[]) => {
     if (filenames.length < 2) {
         return false;
     }
 
-    // eslint-disable-next-line regexp/no-super-linear-backtracking
-    const regex = /(.*?)(\d+)(?:\.compressed)?\.ply$/;
-    const baseMatch = filenames[0].match(regex);
+    const baseMatch = plyFrame(filenames[0]);
     if (!baseMatch) {
         return false;
     }
 
     for (let i = 1; i < filenames.length; i++) {
-        const thisMatch = filenames[i].match(regex);
-        if (!thisMatch || thisMatch[1] !== baseMatch[1]) {
+        const thisMatch = plyFrame(filenames[i]);
+        if (!thisMatch || thisMatch.prefix !== baseMatch.prefix || thisMatch.compressed !== baseMatch.compressed) {
             return false;
         }
     }
@@ -195,20 +213,54 @@ const resolveContents = async (file: ImportFile) => {
 };
 
 // load an alembic camera animation, one set per camera in the file
-const loadAbcCameras = async (file: ImportFile, events: Events) => {
+const loadAbcCameras = async (file: ImportFile, events: Events, scene: Scene) => {
     const contents = await resolveContents(file);
-    const { cameras, frameRate } = importAbcCameras(await contents.arrayBuffer());
+    const imported = importAbcCameras(await contents.arrayBuffer());
+    const { cameras, frameRate } = imported;
+    // Maya's default world unit is centimetres. Alembic does not declare a
+    // global scene unit, so choose the centimetre-to-metre conversion only
+    // when an existing splat bound makes that interpretation unambiguous.
+    const bound = scene.bound;
+    const radius = bound.halfExtents.length();
+    const samplePosition = cameras[0]?.poses[0]?.position;
+    const hasSplats = scene.getElementsByType(ElementType.splat).length > 0;
+    const unscaledDistance = samplePosition?.distance(bound.center) ?? 0;
+    const scaledDistance = samplePosition?.clone().mulScalar(0.01).distance(bound.center) ?? 0;
+    const worldScale = hasSplats && radius > 0.001 &&
+        unscaledDistance > radius * 20 && scaledDistance < radius * 20 &&
+        scaledDistance < unscaledDistance / 10 ? 0.01 : 1;
+    if (worldScale !== 1) {
+        cameras.forEach(camera => camera.poses.forEach((pose) => {
+            pose.position.mulScalar(worldScale);
+            pose.target.mulScalar(worldScale);
+            if (pose.lens?.nearClip) pose.lens.nearClip *= worldScale;
+            if (pose.lens?.farClip) pose.lens.farClip *= worldScale;
+            if (pose.lens?.focusDistance) pose.lens.focusDistance *= worldScale;
+        }));
+    }
+    // Some DCC exports normalize Alembic sample times to zero. A trailing
+    // shot-frame suffix provides the original start when the archive does not.
+    const filenameFrame = file.filename.match(/[._-](\d{3,})\.abc$/i);
+    const offset = imported.startFrame === 0 && filenameFrame ? Number(filenameFrame[1]) : 0;
+    if (offset) {
+        cameras.forEach(camera => camera.poses.forEach((pose) => {
+            pose.frame += offset;
+        }));
+    }
+    const startFrame = imported.startFrame + offset;
 
-    // the timeline has to cover every pose: poses beyond its end are dropped
-    // when a camera track rebuilds its curve, and the rate keeps playback at
-    // the length of the original shot
+    // Alembic samples describe the camera Input range, including layout
+    // handles. They must not expand an existing PLY project's Global range.
     const endFrame = cameras.reduce((max, camera) => {
         return camera.poses.reduce((end, pose) => Math.max(end, pose.frame), max);
-    }, 0);
-    events.fire('timeline.setFrameRate', frameRate);
-    events.fire('timeline.setFrames', endFrame + 1);
-    events.fire('camera.loadSets', cameras);
-    events.fire('timeline.frame', 0);
+    }, -Infinity);
+    events.fire('timeline.setInputRange', 'camera', {
+        start: startFrame,
+        end: endFrame,
+        frameRate,
+        name: file.filename
+    });
+    events.fire('camera.loadSets', cameras.map(camera => ({ ...camera, worldScale })));
 };
 
 // load inria camera poses from json file
@@ -243,15 +295,20 @@ const loadCameraPoses = async (file: ImportFile, events: Events) => {
 
                 poses.push({
                     name: pose.img_name ?? `${file.filename}_${i}`,
-                    frame: i,
+                    frame: frameNumberFromName(pose.img_name ?? '') ?? i,
                     position: new Vec3(-p.x, -p.y, p.z),
                     target: new Vec3(-vec.x, -vec.y, vec.z),
-                    fov
+                    fov,
+                    lens: {
+                        resolutionWidth: pose.width,
+                        resolutionHeight: pose.height
+                    }
                 });
             }
         });
 
         if (poses.length > 0) {
+            fitTimelineToPoses(events, poses);
             events.fire('camera.loadPoses', poses);
         }
     }
@@ -308,13 +365,14 @@ const loadImagesTxt = async (file: ImportFile, events: Events) => {
 
         return {
             name: pose.name,
-            frame: i,
+            frame: frameNumberFromName(pose.name) ?? i,
             position: new Vec3(-t.x, -t.y, t.z),
             target: new Vec3(-vec.x, -vec.y, vec.z)
         };
     });
 
     if (cameraPoses.length > 0) {
+        fitTimelineToPoses(events, cameraPoses);
         events.fire('camera.loadPoses', cameraPoses);
     }
 };
@@ -378,7 +436,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         if (isPlySequence(filenames)) {
             // handle ply sequence
             events.fire('sequence.setPlyFrames', files.map(f => f.contents));
-            events.fire('timeline.frame', 0);
+            events.fire('timeline.setFrame', plyFrame(files[0].filename)!.frame);
         } else if (isSog(filenames) || isLcc(filenames)) {
             const model = await importSplatModel(files, animationFrame);
             if (model) result.push(model);
@@ -416,7 +474,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         } else if (filename.endsWith('.json')) {
                             await loadCameraPoses(files[i], events);
                         } else {
-                            await loadAbcCameras(files[i], events);
+                            await loadAbcCameras(files[i], events, scene);
                         }
                     } catch (error) {
                         const message = error instanceof AbcNoCameraError ?
@@ -444,7 +502,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.abc');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz,.abc');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -524,7 +582,99 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         return target;
     });
 
+    const importSelectedSequence = async () => {
+        const directory = await window.showDirectoryPicker({ id: 'SuperSplatPlySequence', mode: 'read' });
+        const candidates: ImportFile[] = [];
+        for await (const handle of directory.values()) {
+            if (handle.kind === 'file' && plyFrame(handle.name)) {
+                candidates.push({ filename: handle.name, handle, contents: await handle.getFile() });
+            }
+        }
+        const groups = new Map<string, ImportFile[]>();
+        candidates.forEach((candidate) => {
+            const match = plyFrame(candidate.filename)!;
+            const key = `${match.prefix}|${match.compressed}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key)!.push(candidate);
+        });
+        const sequences = Array.from(groups.values())
+        .filter(group => group.length > 1)
+        .map(group => group.sort((a, b) => plyFrame(a.filename)!.frame - plyFrame(b.filename)!.frame));
+        if (sequences.length === 0) {
+            throw new Error(i18n.t('scene.no-ply-sequence'));
+        }
+
+        // A file picker handle cannot reveal its parent directory. Once the
+        // directory is granted, let the artist select the first frame here.
+        const dialog = document.createElement('dialog');
+        dialog.className = 'ply-sequence-dialog';
+        const title = document.createElement('p');
+        title.textContent = i18n.t('scene.select-first-frame');
+        const select = document.createElement('select');
+        sequences.forEach((sequence, index) => {
+            const option = document.createElement('option');
+            option.value = `${index}`;
+            option.textContent = sequence[0].filename;
+            select.append(option);
+        });
+        const confirm = document.createElement('button');
+        confirm.textContent = i18n.t('scene.import-sequence');
+        const cancel = document.createElement('button');
+        cancel.textContent = i18n.t('scene.cancel-sequence');
+        dialog.append(title, select, confirm, cancel);
+        document.body.append(dialog);
+        const selection = await new Promise<number | null>((resolve) => {
+            confirm.onclick = () => resolve(Number(select.value));
+            cancel.onclick = () => resolve(null);
+            dialog.oncancel = () => resolve(null);
+            dialog.showModal();
+        });
+        if (dialog.open) dialog.close();
+        dialog.remove();
+        if (selection !== null) await importFiles(sequences[selection]);
+    };
+
+    const chooseImportMode = async (): Promise<boolean | null> => {
+        const dialog = document.createElement('dialog');
+        dialog.className = 'ply-sequence-dialog';
+        const title = document.createElement('h2');
+        title.textContent = i18n.t('scene.import-files');
+        const option = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.disabled = !window.showDirectoryPicker;
+        option.append(checkbox, document.createTextNode(i18n.t('scene.select-sequence')));
+        const browse = document.createElement('button');
+        browse.textContent = i18n.t('scene.choose-files');
+        checkbox.onchange = () => {
+            browse.textContent = i18n.t(checkbox.checked ? 'scene.choose-folder' : 'scene.choose-files');
+        };
+        const cancel = document.createElement('button');
+        cancel.textContent = i18n.t('scene.cancel-sequence');
+        dialog.append(title, option, browse, cancel);
+        document.body.append(dialog);
+        const result = await new Promise<boolean | null>((resolve) => {
+            browse.onclick = () => resolve(checkbox.checked);
+            cancel.onclick = () => resolve(null);
+            dialog.oncancel = () => resolve(null);
+            dialog.showModal();
+        });
+        if (dialog.open) dialog.close();
+        dialog.remove();
+        return result;
+    };
+
     events.function('scene.import', async () => {
+        const selectSequence = await chooseImportMode();
+        if (selectSequence === null) return;
+        if (selectSequence && window.showDirectoryPicker) {
+            try {
+                await importSelectedSequence();
+            } catch (error) {
+                if (error.name !== 'AbortError') await showLoadError(error.message ?? error, 'PLY sequence');
+            }
+            return;
+        }
         if (fileSelector) {
             fileSelector.click();
         } else {
@@ -563,6 +713,41 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     console.error(error);
                 }
             }
+        }
+    });
+
+    events.function('scene.importCamera', async () => {
+        try {
+            if (window.showOpenFilePicker) {
+                const handles = await window.showOpenFilePicker({
+                    id: 'SuperSplatCameraImport',
+                    multiple: false,
+                    types: [filePickerTypes.abc, filePickerTypes.indexTxt, {
+                        description: 'Camera Poses JSON',
+                        accept: { 'application/json': ['.json'] }
+                    }]
+                });
+                await importFiles(await Promise.all(handles.map(async handle => ({
+                    filename: handle.name,
+                    contents: await handle.getFile(),
+                    handle
+                }))));
+            } else {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.abc,.json,.txt';
+                input.hidden = true;
+                document.body.append(input);
+                input.onchange = async () => {
+                    const file = input.files?.[0];
+                    if (file) await importFiles([{ filename: file.name, contents: file }]);
+                    input.remove();
+                };
+                input.addEventListener('cancel', () => input.remove());
+                input.click();
+            }
+        } catch (error) {
+            if (error.name !== 'AbortError') console.error(error);
         }
     });
 
@@ -610,8 +795,10 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         }
                     }
                 }
-                events.fire('sequence.setPlyFrames', files);
-                events.fire('timeline.frame', 0);
+                if (files.length > 0 && isPlySequence(files.map(file => file.name))) {
+                    events.fire('sequence.setPlyFrames', files);
+                    events.fire('timeline.setFrame', events.invoke('timeline.startFrame'));
+                }
             }
         } catch (error) {
             if (error.name !== 'AbortError') {

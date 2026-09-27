@@ -385,6 +385,9 @@ class AppearancePanel extends Container {
                 setVisible(false);
             }
         });
+        events.on('effectsPanel.visible', (visible: boolean) => {
+            if (visible) setVisible(false);
+        });
 
         resetButton.on('click', () => {
             events.fire('preferences.reset', 'appearance');

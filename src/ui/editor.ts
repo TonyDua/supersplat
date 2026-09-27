@@ -4,6 +4,7 @@ import { Mat4 } from 'playcanvas';
 import { AppearancePanel } from './appearance-panel';
 import { DataPanel } from './data-panel';
 import { Events } from '../events';
+import { EffectsPanel } from './effects-panel';
 import { ExportSettings } from '../export-settings';
 import type { BlobReadSource } from '../io';
 import { AboutPopup } from './about-popup';
@@ -20,7 +21,6 @@ import { PerfOverlay } from './perf-overlay';
 import logo from './playcanvas-logo.png';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
-import { PublishSettingsDialog } from './publish-settings-dialog';
 import { RightToolbar } from './right-toolbar';
 import { ScenePanel } from './scene-panel';
 import { SettingsPanel } from './settings-panel';
@@ -110,6 +110,7 @@ class EditorUI {
         const scenePanel = new ScenePanel(events, tooltips);
         const settingsPanel = new SettingsPanel(events, tooltips);
         const appearancePanel = new AppearancePanel(events, tooltips);
+        const effectsPanel = new EffectsPanel(events, tooltips);
         const overlaysPanel = new OverlaysPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
@@ -136,6 +137,7 @@ class EditorUI {
         // which can extend past the panel bounds, paint above them
         canvasContainer.append(settingsPanel);
         canvasContainer.append(appearancePanel);
+        canvasContainer.append(effectsPanel);
         canvasContainer.append(overlaysPanel);
 
         // view axes container
@@ -178,9 +180,6 @@ class EditorUI {
         // export popup
         const exportPopup = new ExportPopup(events);
 
-        // publish settings
-        const publishSettingsDialog = new PublishSettingsDialog(events);
-
         // image settings
         const imageSettingsDialog = new ImageSettingsDialog(events);
 
@@ -192,7 +191,6 @@ class EditorUI {
 
         topContainer.append(popup);
         topContainer.append(exportPopup);
-        topContainer.append(publishSettingsDialog);
         topContainer.append(imageSettingsDialog);
         topContainer.append(videoSettingsDialog);
         topContainer.append(shortcutsPopup);
@@ -236,27 +234,6 @@ class EditorUI {
 
         events.function('show.savePopup', (filename: string, directory?: FileSystemDirectoryHandle, source?: BlobReadSource) => {
             return exportPopup.show('ssproj', [filename], { directory }, source);
-        });
-
-        events.function('show.publishSettingsDialog', async () => {
-            // show popup if user isn't logged in
-            const userStatus = await events.invoke('publish.userStatus');
-            if (!userStatus) {
-                await events.invoke('showPopup', {
-                    type: 'error',
-                    header: i18n.t('popup.error'),
-                    message: i18n.t('popup.publish.please-log-in')
-                });
-                return false;
-            }
-
-            // get user publish settings
-            const publishSettings = await publishSettingsDialog.show(userStatus);
-
-            // do publish
-            if (publishSettings) {
-                await events.invoke('scene.publish', publishSettings);
-            }
         });
 
         events.function('show.imageSettingsDialog', async () => {

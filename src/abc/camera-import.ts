@@ -8,11 +8,11 @@
  * so the poses map onto the editor's space without an axis swap.
  */
 
-import { Vec3 } from 'playcanvas';
+import { Mat4 as PcMat4, Quat, Vec3 } from 'playcanvas';
 
 import type { Pose } from '../camera-poses';
 import { AbcArchive, AbcObject, TimeSampling } from './archive';
-import { XformSchema, asCamera, asXform, identityMatrix, multiply } from './schema';
+import { XformSchema, asCamera, asXform, identityMatrix, multiply, Mat4 } from './schema';
 
 // the editor only needs a point along the view direction to aim the camera;
 // this matches the distance the other camera importers use
@@ -30,6 +30,7 @@ type AbcCameraSet = {
 type AbcCameraImport = {
     cameras: AbcCameraSet[];
     frameRate: number;
+    startFrame: number;
 };
 
 /**
@@ -83,7 +84,7 @@ const sampleIndexAt = (sampled: Sampled, time: number) => {
  * node stops inheriting its parent's transform.
  */
 const worldMatrixAt = (parents: WeakMap<AbcObject, AbcObject>, object: AbcObject, time: number) => {
-    let result = identityMatrix();
+    let result: Mat4 = identityMatrix();
     let first = true;
 
     for (let node: AbcObject | null = object; node; node = parents.get(node) ?? null) {
@@ -130,8 +131,7 @@ const asCameraName = (object: AbcObject, parents: WeakMap<AbcObject, AbcObject>)
 /**
  * Read every camera of an archive as editor poses, one per sample.
  *
- * Sample times become frames starting at zero, at the frame rate of the file's
- * uniform time sampling, so playback matches the original shot length.
+ * Sample times retain their absolute shot frame at the file's frame rate.
  * Non-uniform files fall back to 24 fps.
  */
 const importAbcCameras = (buffer: ArrayBuffer): AbcCameraImport => {
@@ -145,10 +145,10 @@ const importAbcCameras = (buffer: ArrayBuffer): AbcCameraImport => {
     // the camera's own transform drives the samples, or its nearest parent that
     // has one when the transform sits above the camera shape
     const driverOf = (object: AbcObject) => {
-        let driver = asXform(object);
-        for (let node = parents.get(object) ?? null; !driver && node; node = parents.get(node) ?? null) {
+        let driver: XformSchema | null = null;
+        for (let node: AbcObject | null = object; node; node = parents.get(node) ?? null) {
             const xform = asXform(node);
-            if (xform && xform.numSamples > 0) {
+            if (xform && xform.numSamples > 1 && (!driver || xform.numSamples > driver.numSamples)) {
                 driver = xform;
             }
         }
@@ -156,40 +156,48 @@ const importAbcCameras = (buffer: ArrayBuffer): AbcCameraImport => {
     };
 
     const drivers = cameraObjects.map(driverOf);
-    if (drivers.every(driver => !driver || driver.numSamples === 0)) {
-        throw new Error('abc: the camera has no animated transform');
-    }
+    const cameraSchemas = cameraObjects.map(object => asCamera(object)!);
+    const samplings = cameraSchemas.map((camera, index): Sampled => {
+        const driver = drivers[index];
+        return driver && driver.numSamples > camera.numSamples ? driver : camera;
+    });
 
     // every camera in a shot shares its time base, so the first one that
     // animates defines both the frame rate and the frame numbering
-    const first = drivers.find(driver => driver && driver.numSamples > 0)!;
+    const first = samplings.find(sampled => sampled.numSamples > 1) ?? samplings[0];
     const uniform = first.timeSampling.numSamplesPerCycle === 1 && first.timeSampling.timePerCycle > 0;
     const frameRate = uniform ? 1 / first.timeSampling.timePerCycle : DEFAULT_FRAME_RATE;
-    const startTime = first.timeSampling.timeOfSample(0);
-
     const cameras = cameraObjects.map((cameraObject, index) => {
-        const camera = asCamera(cameraObject)!;
-        const driver = drivers[index] && drivers[index]!.numSamples > 0 ? drivers[index]! : first;
+        const camera = cameraSchemas[index];
+        const sampling = samplings[index];
 
         const poses: Pose[] = [];
-        for (let i = 0; i < driver.numSamples; ++i) {
-            const time = driver.timeSampling.timeOfSample(i);
+        for (let i = 0; i < sampling.numSamples; ++i) {
+            const time = sampling.timeSampling.timeOfSample(i);
             const matrix = worldMatrixAt(parents, cameraObject, time);
 
             const position = new Vec3(matrix[12], matrix[13], matrix[14]);
+            // Imath's row-vector matrix has the same flat storage as the
+            // transposed column-vector matrix expected by PlayCanvas.
+            const rotationMatrix = new PcMat4();
+            rotationMatrix.data.set(matrix);
+            const rotation = new Quat().setFromMat4(rotationMatrix).normalize();
             // the lens looks down the local -Z axis, which is the negation of
             // the third row of the row vector rotation block
             const forward = new Vec3(-matrix[8], -matrix[9], -matrix[10]).normalize();
 
-            const frame = Math.max(0, Math.round((time - startTime) * frameRate));
+            const frame = Math.round(time * frameRate);
             const fov = camera.fieldOfViewAt(sampleIndexAt(camera, time));
+            const lens = camera.lensAt(sampleIndexAt(camera, time));
 
             poses.push({
                 name: `${cameraObject.name}@${frame}`,
                 frame,
                 position,
                 target: position.clone().add(forward.mulScalar(TARGET_DISTANCE)),
-                fov: fov ?? undefined
+                fov: fov ?? undefined,
+                lens,
+                rotation
             });
         }
 
@@ -204,7 +212,11 @@ const importAbcCameras = (buffer: ArrayBuffer): AbcCameraImport => {
         };
     });
 
-    return { cameras, frameRate };
+    const startFrame = cameras.reduce((start, camera) => {
+        return camera.poses.reduce((value, pose) => Math.min(value, pose.frame), start);
+    }, Infinity);
+    if (!Number.isFinite(startFrame)) throw new Error('abc: camera has no samples');
+    return { cameras, frameRate, startFrame };
 };
 
 export { importAbcCameras, AbcCameraImport, AbcNoCameraError };

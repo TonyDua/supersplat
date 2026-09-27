@@ -10,14 +10,13 @@ const FREE_VALUE = 'free';
 
 /**
  * Viewport camera picker: the free camera or one of the camera sets, in the
- * top left of the viewport. Picking a set looks through it, which also stops
+ * beside the view cube. Picking a set looks through it, which also stops
  * navigation so a shot camera stays where its animation puts it.
  */
 class CameraPicker extends Container {
     constructor(events: Events, tooltips: Tooltips) {
         super({
-            id: 'camera-picker',
-            hidden: true
+            id: 'camera-picker'
         });
 
         // keep pointer events off the canvas so using the picker does not also
@@ -52,16 +51,17 @@ class CameraPicker extends Container {
 
         this.append(select);
 
-        events.on('camera.sets', (state: CameraSets) => {
+        const sync = (state: CameraSets) => {
             names = state.names;
-            shownValue = state.lookThrough ? `${state.active}` : FREE_VALUE;
+            shownValue = state.lookThrough ? `${state.view}` : FREE_VALUE;
             select.options = [
                 { v: FREE_VALUE, t: i18n.t('camera-picker.free') },
                 ...names.map((name, i) => ({ v: `${i}`, t: name }))
             ];
             select.value = shownValue;
-            this.hidden = names.length === 0;
-        });
+        };
+        events.on('camera.sets', sync);
+        sync(events.invoke('camera.sets'));
     }
 }
 

@@ -10,7 +10,6 @@ import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
 import { registerPreferences } from './preferences';
-import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
 import { Scene } from './scene';
 import { getSceneConfig } from './scene-config';
@@ -18,6 +17,7 @@ import { registerSelectionEvents } from './selection';
 import { registerSequenceEvents } from './sequence';
 import { ShortcutManager } from './shortcut-manager';
 import { registerTimelineEvents } from './timeline';
+import { registerViewportEffects } from './viewport-effects';
 import { BoxSelection } from './tools/box-selection';
 import { BrushSelection } from './tools/brush-selection';
 import { EyedropperSelection } from './tools/eyedropper-selection';
@@ -111,10 +111,10 @@ const main = async () => {
 
     // register events that only need the events object (before UI is created)
     registerTimelineEvents(events);
+    registerViewportEffects(events);
     registerCameraPosesEvents(events);
     registerTrackManagerEvents(events);
     registerTransformHandlerEvents(events);
-    registerPublishEvents(events);
     registerIframeApi(events);
 
     // initialize shortcuts
@@ -224,6 +224,9 @@ const main = async () => {
         scene.forceRender = true;
     });
     events.on('lockedClr', (clr: Color) => {
+        scene.forceRender = true;
+    });
+    events.on('viewportEffects.changed', () => {
         scene.forceRender = true;
     });
 

@@ -303,7 +303,7 @@ class AbcObject {
         const count = group.numChildren;
 
         if (count > 0 && group.child(0) && !group.child(0).isData) {
-            object.properties = AbcObject.parseProperties(group.group(0), timeSamplings, indexedMetaData);
+            object.properties.push(...AbcObject.parseProperties(group.group(0), timeSamplings, indexedMetaData));
         }
 
         if (count > 0 && group.child(count - 1).isData) {

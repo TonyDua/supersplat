@@ -1,4 +1,4 @@
-import { Vec3 } from 'playcanvas';
+import { EventHandle, Quat, Vec3 } from 'playcanvas';
 
 import { CubicSpline } from './anim/spline';
 import { AnimTrack } from './anim-track';
@@ -9,7 +9,24 @@ type Pose = {
     frame: number,
     position: Vec3,
     target: Vec3,
-    fov?: number
+    fov?: number,
+    lens?: CameraLens,
+    rotation?: Quat
+};
+
+type CameraLens = {
+    focalLength?: number,
+    filmBackWidth?: number,
+    filmBackHeight?: number,
+    resolutionWidth?: number,
+    resolutionHeight?: number,
+    filmOffsetX?: number,
+    filmOffsetY?: number,
+    lensSqueeze?: number,
+    fStop?: number,
+    focusDistance?: number,
+    nearClip?: number,
+    farClip?: number
 };
 
 /**
@@ -18,14 +35,17 @@ type Pose = {
  */
 type CameraSet = {
     name: string,
-    track: CameraAnimTrack
+    track: CameraAnimTrack,
+    worldScale: number
 };
 
 /** The viewport camera pose, as reported by `camera.getPose`. */
 type View = {
     position: Vec3,
     target: Vec3,
-    fov?: number
+    fov?: number,
+    rotation?: Quat,
+    lens?: CameraLens
 };
 
 /** What the viewport picker needs to render the camera list. */
@@ -35,7 +55,8 @@ type CameraSets = {
     /** Index of the set key editing targets, -1 when there are none. */
     active: number,
     /** Whether the viewport is looking through the active set. */
-    lookThrough: boolean
+    lookThrough: boolean,
+    view: number
 };
 
 /**
@@ -53,26 +74,30 @@ class CameraAnimTrack implements AnimTrack {
     private poses: Pose[] = [];
     private events: Events;
     private onTimelineChange: ((frame: number) => void) | null = null;
+    private poseAt: ((frame: number) => View) | null = null;
+    private handles: EventHandle[] = [];
 
     constructor(events: Events) {
         this.events = events;
 
-        // Rebuild the curve when timeline parameters change
-        events.on('timeline.frames', () => {
+        // Camera source samples are independent of the project's Global range.
+        this.handles.push(events.on('timeline.smoothness', () => {
             this.rebuildSpline();
-        });
+        }));
 
-        events.on('timeline.smoothness', () => {
-            this.rebuildSpline();
-        });
+    }
 
-        events.on('timeline.loop', () => {
-            this.rebuildSpline();
-        });
+    destroy(): void {
+        this.handles.forEach(handle => handle.off());
+        this.handles = [];
     }
 
     get keys(): readonly number[] {
         return this.poses.map(p => p.frame);
+    }
+
+    getPoseAt(frame: number): View | null {
+        return this.poseAt?.(frame) ?? null;
     }
 
     addKey(frame: number): boolean {
@@ -147,7 +172,9 @@ class CameraAnimTrack implements AnimTrack {
             frame: toFrame,
             position: source.position.clone(),
             target: source.target.clone(),
-            fov: source.fov
+            fov: source.fov,
+            lens: source.lens ? { ...source.lens } : undefined,
+            rotation: source.rotation?.clone()
         });
 
         this.rebuildSpline();
@@ -162,6 +189,7 @@ class CameraAnimTrack implements AnimTrack {
     clear(): void {
         this.poses.length = 0;
         this.onTimelineChange = null;
+        this.poseAt = null;
         this.events.fire('track.keysCleared');
     }
 
@@ -171,7 +199,9 @@ class CameraAnimTrack implements AnimTrack {
             frame: p.frame,
             position: p.position.clone(),
             target: p.target.clone(),
-            fov: p.fov
+            fov: p.fov,
+            lens: p.lens ? { ...p.lens } : undefined,
+            rotation: p.rotation?.clone()
         }));
     }
 
@@ -181,7 +211,9 @@ class CameraAnimTrack implements AnimTrack {
             frame: p.frame,
             position: p.position.clone(),
             target: p.target.clone(),
-            fov: p.fov
+            fov: p.fov,
+            lens: p.lens ? { ...p.lens } : undefined,
+            rotation: p.rotation?.clone()
         }));
         this.rebuildSpline();
         this.events.fire('track.keysLoaded');
@@ -232,16 +264,25 @@ class CameraAnimTrack implements AnimTrack {
         this.events.fire('track.keysLoaded');
     }
 
+    scaleWorld(ratio: number): void {
+        for (const pose of this.poses) {
+            pose.position.mulScalar(ratio);
+            pose.target.mulScalar(ratio);
+            if (pose.lens?.nearClip) pose.lens.nearClip *= ratio;
+            if (pose.lens?.farClip) pose.lens.farClip *= ratio;
+            if (pose.lens?.focusDistance) pose.lens.focusDistance *= ratio;
+        }
+        this.rebuildSpline();
+    }
+
     private rebuildSpline(): void {
-        const duration = this.events.invoke('timeline.frames');
         const smoothness = this.events.invoke('timeline.smoothness');
-        const loop = this.events.invoke('timeline.loop');
 
         const orderedPoses = this.poses.slice()
-        .filter(a => a.frame < duration)
         .sort((a, b) => a.frame - b.frame);
+        const startFrame = orderedPoses[0]?.frame ?? 0;
 
-        const times = orderedPoses.map(p => p.frame);
+        const times = orderedPoses.map(p => p.frame - startFrame);
         const points: number[] = [];
         for (let i = 0; i < orderedPoses.length; ++i) {
             const p = orderedPoses[i];
@@ -253,32 +294,51 @@ class CameraAnimTrack implements AnimTrack {
         if (orderedPoses.length > 1) {
             // when not looping the spline clamps, holding the first/last pose
             // beyond the outer keys instead of wrapping the end into the start
-            const spline = loop ?
-                CubicSpline.fromPointsLooping(duration, times, points, smoothness) :
-                CubicSpline.fromPoints(times, points, smoothness);
+            const spline = CubicSpline.fromPoints(times, points, smoothness);
             const result: number[] = [];
-            const pose = { position: new Vec3(), target: new Vec3(), fov: 0 };
+            const pose: View = { position: new Vec3(), target: new Vec3(), fov: 0, rotation: new Quat() };
 
-            this.onTimelineChange = (frame: number) => {
-                if (!this.active) return;
-                spline.evaluate(frame, result);
+            this.poseAt = (frame: number) => {
+                spline.evaluate(frame - startFrame, result);
                 pose.position.set(result[0], result[1], result[2]);
                 pose.target.set(result[3], result[4], result[5]);
                 pose.fov = result[6];
-                this.events.fire('camera.setPose', pose, 0);
+                const later = orderedPoses.findIndex(p => p.frame >= frame);
+                const right = Math.max(0, later < 0 ? orderedPoses.length - 1 : later);
+                const left = Math.max(0, right - 1);
+                const a = orderedPoses[left];
+                const b = orderedPoses[right];
+                if (a.rotation && b.rotation) {
+                    const t = a === b ? 0 : Math.max(0, Math.min(1, (frame - a.frame) / (b.frame - a.frame)));
+                    pose.rotation ??= new Quat();
+                    pose.rotation.slerp(a.rotation, b.rotation, t);
+                } else {
+                    pose.rotation = undefined;
+                }
+                pose.lens = (a === b ? a : frame === b.frame ? b : a).lens;
+                return pose;
             };
         } else if (orderedPoses.length === 1) {
             // a single key can't form a spline; hold its pose at every frame
             const p = orderedPoses[0];
-            const pose = { position: p.position.clone(), target: p.target.clone(), fov: p.fov };
-
-            this.onTimelineChange = () => {
-                if (!this.active) return;
-                this.events.fire('camera.setPose', pose, 0);
+            const pose: View = {
+                position: p.position.clone(),
+                target: p.target.clone(),
+                fov: p.fov,
+                rotation: p.rotation?.clone(),
+                lens: p.lens
             };
+
+            this.poseAt = () => pose;
         } else {
-            this.onTimelineChange = null;
+            this.poseAt = null;
         }
+
+        this.onTimelineChange = (frame: number) => {
+            if (!this.active) return;
+            const pose = this.getPoseAt(frame);
+            if (pose) this.events.fire(pose.rotation ? 'camera.setTrackedPose' : 'camera.setPose', pose, 0);
+        };
 
         // re-evaluate at the current frame so the camera updates immediately
         this.evaluate(this.events.invoke('timeline.frame'));
@@ -299,6 +359,7 @@ const registerCameraPosesEvents = (events: Events) => {
 
     // index of the set that key editing targets, -1 when there are none
     let activeIndex = -1;
+    let viewIndex = -1;
 
     // whether the viewport is looking through the active set
     let lookThrough = false;
@@ -312,27 +373,34 @@ const registerCameraPosesEvents = (events: Events) => {
 
     const updateActivation = () => {
         sets.forEach((set, i) => {
-            set.track.active = lookThrough && i === activeIndex;
+            set.track.active = lookThrough && i === viewIndex;
         });
     };
 
     const notify = () => {
+        const poses = activeTrack()?.getPoses() ?? [];
+        events.fire('timeline.setInputRange', 'camera', poses.length ? {
+            start: poses.reduce((min, pose) => Math.min(min, pose.frame), Infinity),
+            end: poses.reduce((max, pose) => Math.max(max, pose.frame), -Infinity),
+            name: sets[activeIndex].name
+        } : null);
         events.fire('camera.sets', {
             names: sets.map(set => set.name),
             active: activeIndex,
-            lookThrough
+            lookThrough,
+            view: viewIndex
         } satisfies CameraSets);
     };
 
     // drive the viewport camera from the active set at the current frame
     const applyActivePose = () => {
-        activeTrack()?.evaluate(events.invoke('timeline.frame') as number);
+        sets[viewIndex]?.track.evaluate(events.invoke('timeline.frame') as number);
     };
 
     // only the set being looked through follows playback and scrubbing
     const onTimelineChange = (frame: number) => {
         if (lookThrough) {
-            activeTrack()?.evaluate(frame);
+            sets[viewIndex]?.track.evaluate(frame);
         }
     };
 
@@ -350,11 +418,12 @@ const registerCameraPosesEvents = (events: Events) => {
     };
 
     /**
-     * Replace every set. Imported cameras take over the viewport so that an
-     * import behaves like the single camera track it replaces; loading a
-     * document keeps the free view it restored instead.
+     * Replace every set. Importing keeps the artist in perspective view so
+     * camera objects remain visible and can be inspected before look-through.
      */
-    const loadSets = (incoming: Array<{ name: string, poses: Pose[] }>, lookThroughFirst: boolean) => {
+    const loadSets = (incoming: Array<{ name: string, poses: Pose[], worldScale?: number }>) => {
+        const returnToFreeView = lookThrough ? freeView : null;
+        sets.forEach(set => set.track.destroy());
         sets.length = 0;
         const taken = new Set<string>();
         incoming.forEach((entry) => {
@@ -362,22 +431,17 @@ const registerCameraPosesEvents = (events: Events) => {
             track.loadPoses(entry.poses);
             const name = uniqueName(entry.name, taken);
             taken.add(name);
-            sets.push({ name, track });
+            sets.push({ name, track, worldScale: entry.worldScale ?? 1 });
         });
 
-        if (lookThroughFirst && sets.length > 0) {
-            // remember where the free camera was before a camera takes over
-            freeView = lookThrough ? freeView : events.invoke('camera.getPose') as View;
-            activeIndex = 0;
-            lookThrough = true;
-        } else {
-            activeIndex = sets.length > 0 ? 0 : -1;
-            lookThrough = false;
-        }
+        activeIndex = sets.length > 0 ? 0 : -1;
+        viewIndex = -1;
+        lookThrough = false;
+        freeView = null;
 
         updateActivation();
-        if (lookThrough) {
-            applyActivePose();
+        if (returnToFreeView) {
+            events.fire('camera.setPose', returnToFreeView, 0);
         }
 
         events.fire('track.keysLoaded');
@@ -393,22 +457,65 @@ const registerCameraPosesEvents = (events: Events) => {
         return activeTrack()?.getPoses() ?? [];
     });
 
+    events.function('camera.selectedDetails', () => {
+        const set = sets[activeIndex];
+        if (!set) return null;
+        const frame = events.invoke('timeline.frame') as number;
+        const poses = set.track.getPoses();
+        const pose = poses.filter(value => value.frame <= frame).sort((a, b) => b.frame - a.frame)[0] ?? poses[0];
+        return {
+            name: set.name,
+            frame,
+            fov: set.track.getPoseAt(frame)?.fov,
+            lens: pose?.lens ?? {},
+            worldScale: set.worldScale
+        };
+    });
+
+    events.function('camera.selectedPose', () => {
+        return activeTrack()?.getPoseAt(events.invoke('timeline.frame')) ?? null;
+    });
+
+    events.function('camera.scenePoses', () => {
+        const frame = events.invoke('timeline.frame');
+        const poses = sets.map(set => set.track.getPoseAt(frame)).filter(pose => !!pose);
+        if (lookThrough && freeView) poses.push(freeView);
+        return poses;
+    });
+
     events.function('camera.sets', () => {
         return {
             names: sets.map(set => set.name),
             active: activeIndex,
-            lookThrough
+            lookThrough,
+            view: viewIndex
         };
+    });
+
+    events.on('camera.selectSet', (index: number) => {
+        if (index < 0 || index >= sets.length || index === activeIndex) return;
+        activeIndex = index;
+        events.fire('track.keysLoaded');
+        notify();
+    });
+
+    events.on('camera.setWorldScale', (value: number) => {
+        const set = sets[activeIndex];
+        if (!set || !Number.isFinite(value) || value <= 0 || value === set.worldScale) return;
+        set.track.scaleWorld(value / set.worldScale);
+        set.worldScale = value;
+        events.fire('track.keysLoaded');
+        notify();
     });
 
     // the single camera formats (inria json, colmap images.txt) import one set
     events.on('camera.loadPoses', (poses: Pose[]) => {
-        loadSets([{ name: 'camera', poses }], true);
+        loadSets([{ name: 'camera', poses }]);
     });
 
     // an alembic file can hold several cameras, one set each
     events.on('camera.loadSets', (incoming: Array<{ name: string, poses: Pose[] }>) => {
-        loadSets(incoming, true);
+        loadSets(incoming);
     });
 
     // selecting a set looks through it; -1 returns to the free camera, which
@@ -417,7 +524,7 @@ const registerCameraPosesEvents = (events: Events) => {
         const next = index >= 0 && index < sets.length ? index : -1;
         const nextLookThrough = next >= 0;
 
-        if (nextLookThrough === lookThrough && next === activeIndex) {
+        if (nextLookThrough === lookThrough && next === viewIndex) {
             return;
         }
 
@@ -428,6 +535,7 @@ const registerCameraPosesEvents = (events: Events) => {
         if (next >= 0) {
             activeIndex = next;
         }
+        viewIndex = next;
         lookThrough = nextLookThrough;
         updateActivation();
 
@@ -452,14 +560,16 @@ const registerCameraPosesEvents = (events: Events) => {
         if (sets.length === 0) {
             return;
         }
-        const current = lookThrough ? activeIndex : -1;
+        const current = lookThrough ? viewIndex : -1;
         const next = current + 1;
         events.fire('camera.setActiveSet', next < sets.length ? next : -1);
     });
 
     events.on('scene.clear', () => {
+        sets.forEach(set => set.track.destroy());
         sets.length = 0;
         activeIndex = -1;
+        viewIndex = -1;
         lookThrough = false;
         freeView = null;
         events.fire('track.keysCleared');
@@ -475,13 +585,16 @@ const registerCameraPosesEvents = (events: Events) => {
         .filter(set => set.track.getPoses().length > 0)
         .map(set => ({
             name: set.name,
+            worldScale: set.worldScale,
             poses: set.track.getPoses().map((pose) => {
                 return {
                     name: pose.name,
                     frame: pose.frame,
                     position: pack3(pose.position),
                     target: pack3(pose.target),
-                    fov: pose.fov
+                    fov: pose.fov,
+                    lens: pose.lens,
+                    rotation: pose.rotation ? [pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w] : undefined
                 };
             })
         }));
@@ -498,13 +611,16 @@ const registerCameraPosesEvents = (events: Events) => {
         const loaded = poseSets.map((set: any) => {
             return {
                 name: set.name ?? 'camera',
+                worldScale: set.worldScale ?? 1,
                 poses: (set.poses ?? []).map((docPose: any, index: number) => {
                     return {
                         name: docPose.name,
                         frame: docPose.frame ?? (index * fps),
                         position: new Vec3(docPose.position),
                         target: new Vec3(docPose.target),
-                        fov: docPose.fov ?? defaultFov
+                        fov: docPose.fov ?? defaultFov,
+                        lens: docPose.lens,
+                        rotation: docPose.rotation ? new Quat(docPose.rotation) : undefined
                     };
                 })
             };
@@ -512,8 +628,8 @@ const registerCameraPosesEvents = (events: Events) => {
 
         // the document also restores its saved view, so do not look through a
         // camera on load - the picker is one click away
-        loadSets(loaded, false);
+        loadSets(loaded);
     });
 };
 
-export { registerCameraPosesEvents, CameraAnimTrack, Pose, CameraSets };
+export { registerCameraPosesEvents, CameraAnimTrack, Pose, CameraSets, CameraLens };

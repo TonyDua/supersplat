@@ -4,6 +4,7 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import appearanceSvg from './svg/appearance.svg';
+import effectsSvg from './svg/effects.svg';
 import cameraFrameSelectionSvg from './svg/camera-frame-selection.svg';
 import cameraResetSvg from './svg/camera-reset.svg';
 import flyCameraSvg from './svg/fly-camera.svg';
@@ -31,6 +32,10 @@ class RightToolbar extends Container {
 
         const appearance = new Button({
             id: 'right-toolbar-appearance',
+            class: 'right-toolbar-toggle'
+        });
+        const effects = new Button({
+            id: 'right-toolbar-effects',
             class: 'right-toolbar-toggle'
         });
 
@@ -66,6 +71,7 @@ class RightToolbar extends Container {
         });
 
         appearance.dom.appendChild(createSvg(appearanceSvg));
+        effects.dom.appendChild(createSvg(effectsSvg));
         orbitMode.dom.appendChild(createSvg(orbitCameraSvg));
         flyMode.dom.appendChild(createSvg(flyCameraSvg));
         cameraFrameSelection.dom.appendChild(createSvg(cameraFrameSelectionSvg));
@@ -75,6 +81,7 @@ class RightToolbar extends Container {
         // icon-only buttons: keep accessible names in sync with the language
         const buttonLabels: [Button, string][] = [
             [appearance, 'panel.appearance'],
+            [effects, 'panel.effects'],
             [overlays, 'panel.overlays'],
             [orbitMode, 'tooltip.right-toolbar.orbit-camera'],
             [flyMode, 'tooltip.right-toolbar.fly-camera'],
@@ -87,6 +94,7 @@ class RightToolbar extends Container {
         });
 
         this.append(appearance);
+        this.append(effects);
         this.append(overlays);
         this.append(new Element({ class: 'right-toolbar-separator' }));
         this.append(orbitMode);
@@ -111,6 +119,7 @@ class RightToolbar extends Container {
         };
 
         tooltips.register(appearance, tooltip('panel.appearance'), 'left');
+        tooltips.register(effects, tooltip('panel.effects'), 'left');
         tooltips.register(orbitMode, tooltip('tooltip.right-toolbar.orbit-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(flyMode, tooltip('tooltip.right-toolbar.fly-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(cameraFrameSelection, tooltip('tooltip.right-toolbar.frame-selection', 'camera.focus'), 'left');
@@ -121,6 +130,7 @@ class RightToolbar extends Container {
         // add event handlers
 
         appearance.on('click', () => events.fire('appearancePanel.toggleVisible'));
+        effects.on('click', () => events.fire('effectsPanel.toggleVisible'));
         orbitMode.on('click', () => events.fire('camera.setControlMode', 'orbit'));
         flyMode.on('click', () => events.fire('camera.setControlMode', 'fly'));
         cameraFrameSelection.on('click', () => events.fire('camera.focus'));
@@ -130,6 +140,9 @@ class RightToolbar extends Container {
 
         events.on('appearancePanel.visible', (visible: boolean) => {
             appearance.class[visible ? 'add' : 'remove']('active');
+        });
+        events.on('effectsPanel.visible', (visible: boolean) => {
+            effects.class[visible ? 'add' : 'remove']('active');
         });
 
         events.on('camera.controlMode', (mode: 'orbit' | 'fly') => {

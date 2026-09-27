@@ -17,6 +17,8 @@ import {
     selectLod
 } from '@playcanvas/splat-transform';
 
+import { PointCloudSource } from './point-cloud-source';
+
 type LoadResult = {
     source: ChunkSource;
     transform: Transform;
@@ -203,6 +205,12 @@ const loadSplatSource = async (
     }
 
     try {
+        // Standard XYZ/RGB PLY point clouds have no Gaussian covariance or SH.
+        // Give them a display footprint while retaining lazy source reads.
+        if (inputFormat === 'ply' && source.meta.availableLayers.has('position') &&
+            (!source.meta.availableLayers.has('geometric') || !source.meta.availableLayers.has('color'))) {
+            source = await PointCloudSource.create(source);
+        }
         validateSplatSource(source);
 
         // SOG and compressed PLY are written in Morton order already; ssproj

@@ -26,8 +26,7 @@
     display: none;
 }
 
-// SuperSplat home: mark + wordmark, hover like the other menubar items,
-// and the same 48px height so the highlight fills the bar.
+// Static brand mark and wordmark.
 #menu-home {
     display: flex;
     flex-direction: row;
@@ -37,17 +36,6 @@
     padding: 0 14px 0 12px;
     margin: 0;
     flex-grow: 0;
-    cursor: pointer;
-
-    &:hover,
-    &:focus-visible {
-        background-color: $bcg-dark;
-        outline: none;
-
-        #menu-wordmark {
-            color: $text-primary;
-        }
-    }
 }
 
 #menu-logo {

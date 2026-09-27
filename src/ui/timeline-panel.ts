@@ -1,4 +1,4 @@
-import { Button, Container, Element, NumericInput, SelectInput } from '@playcanvas/pcui';
+import { Button, Container, Element, Label, NumericInput } from '@playcanvas/pcui';
 
 import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
@@ -22,6 +22,24 @@ class Ticks extends Container {
 
         let frameFromOffset: (offset: number) => number;
         let moveCursor: (frame: number) => void;
+        let cacheRanges: Array<[number, number]> = [];
+
+        const updateCacheRanges = () => {
+            workArea.dom.querySelectorAll('.sequence-cache-range').forEach(el => el.remove());
+            if (!cacheRanges.length) return;
+            const count = events.invoke('timeline.frames') as number;
+            const start = events.invoke('timeline.startFrame') as number;
+            const width = workArea.dom.getBoundingClientRect().width - 40;
+            for (const [from, to] of cacheRanges) {
+                const bar = document.createElement('div');
+                bar.className = 'sequence-cache-range';
+                const left = 20 + (from - start) / Math.max(1, count - 1) * width;
+                const right = 20 + (to - start) / Math.max(1, count - 1) * width;
+                bar.style.left = `${left}px`;
+                bar.style.width = `${Math.max(2, right - left + 2)}px`;
+                workArea.dom.append(bar);
+            }
+        };
 
         // pcui wrappers around key markers, kept so their tooltips unregister
         // (via the destroy event) when the timeline is rebuilt
@@ -35,6 +53,8 @@ class Ticks extends Container {
             workArea.dom.innerHTML = '';
 
             const numFrames = events.invoke('timeline.frames');
+            const startFrame = events.invoke('timeline.startFrame');
+            const endFrame = startFrame + numFrames - 1;
             const currentFrame = events.invoke('timeline.frame');
 
             const padding = 20;
@@ -50,16 +70,16 @@ class Ticks extends Container {
             const tickStep = labelStep === 1 ? 0 : labelStep / (labelStep % 5 === 0 ? 5 : 2);
 
             const offsetFromFrame = (frame: number) => {
-                return padding + Math.floor(frame / (numFrames - 1) * width);
+                return padding + Math.floor((frame - startFrame) / Math.max(1, numFrames - 1) * width);
             };
 
             frameFromOffset = (offset: number) => {
-                return Math.max(0, Math.min(numFrames - 1, Math.floor((offset - padding) / width * (numFrames - 1))));
+                return Math.max(startFrame, Math.min(endFrame, startFrame + Math.floor((offset - padding) / width * (numFrames - 1))));
             };
 
             // timeline labels
 
-            for (let frame = 0; frame < numFrames; frame += labelStep) {
+            for (let frame = Math.ceil(startFrame / labelStep) * labelStep; frame <= endFrame; frame += labelStep) {
                 const label = document.createElement('div');
                 label.classList.add('time-label');
                 label.style.left = `${offsetFromFrame(frame)}px`;
@@ -70,7 +90,7 @@ class Ticks extends Container {
             // minor ticks
 
             if (tickStep > 0) {
-                for (let frame = tickStep; frame < numFrames; frame += tickStep) {
+                for (let frame = Math.ceil(startFrame / tickStep) * tickStep; frame <= endFrame; frame += tickStep) {
                     if (frame % labelStep !== 0) {
                         const tick = document.createElement('div');
                         tick.classList.add('time-tick');
@@ -83,10 +103,9 @@ class Ticks extends Container {
             // keys - get from active track
             const keys = events.invoke('track.keys') as number[] ?? [];
 
-            // keys at frame >= numFrames don't play (the spline ignores them);
-            // pin them just past the right end of the strip instead of hiding them
-            const inRangeKeys = keys.filter(k => k < numFrames);
-            const outOfRangeKeys = keys.filter(k => k >= numFrames).sort((a, b) => a - b);
+            // Source handles outside the Global playback range remain valid.
+            const inRangeKeys = keys.filter(k => k >= startFrame && k <= endFrame);
+            const outOfRangeKeys = keys.filter(k => k < startFrame || k > endFrame).sort((a, b) => a - b);
 
             // center of a pinned marker: 10px right of the last frame, staggered
             // 2px per extra marker, capped so the 8px diamond stays inside the
@@ -205,6 +224,8 @@ class Ticks extends Container {
             cursor.textContent = currentFrame.toString();
             workArea.dom.appendChild(cursor);
 
+            updateCacheRanges();
+
             moveCursor = (frame: number) => {
                 cursor.style.left = `${offsetFromFrame(frame)}px`;
                 cursor.textContent = frame.toString();
@@ -277,8 +298,15 @@ class Ticks extends Container {
             rebuild();
         });
 
+        events.on('timeline.startFrame', () => rebuild());
+
         events.on('timeline.frame', (frame: number) => {
             moveCursor(frame);
+        });
+
+        events.on('sequence.cacheStatus', (status: { ranges: Array<[number, number]> }) => {
+            cacheRanges = status.ranges;
+            updateCacheRanges();
         });
 
         // rebuild when track keys change
@@ -358,37 +386,90 @@ class TimelinePanel extends Container {
 
         // settings
 
-        const speed = new SelectInput({
+        const cache = new Button({
+            id: 'sequence-cache',
+            text: i18n.t('timeline.cache'),
+            enabled: false
+        });
+        cache.on('click', () => events.fire('sequence.toggleCache'));
+        const updateCache = (status: { available: boolean, enabled: boolean, loading: boolean,
+            cached: number, total: number, capacity: number }) => {
+            cache.enabled = status.available;
+            cache.class[status.enabled ? 'add' : 'remove']('active');
+            cache.text = status.loading ?
+                `${i18n.t('timeline.cache')} ${status.cached}/${Math.min(status.total, status.capacity)}` :
+                i18n.t('timeline.cache');
+        };
+        events.on('sequence.cacheStatus', updateCache);
+
+        const inputRange = new Label({ id: 'input-range' });
+        const updateInputRange = (ranges: { ply?: { start: number, end: number } | null,
+            camera?: { start: number, end: number } | null }) => {
+            const parts = [];
+            if (ranges.ply) parts.push(`PLY ${ranges.ply.start}–${ranges.ply.end}`);
+            if (ranges.camera) parts.push(`CAM ${ranges.camera.start}–${ranges.camera.end}`);
+            inputRange.text = `${i18n.t('timeline.input')}: ${parts.join(' · ') || '—'}`;
+        };
+        events.on('timeline.inputRanges', updateInputRange);
+        updateInputRange(events.invoke('timeline.inputRanges'));
+        const globalLabel = new Label({ id: 'global-range', text: i18n.t('timeline.global') });
+
+        const speed = new NumericInput({
             id: 'speed',
-            defaultValue: 30,
-            options: [
-                { v: 1, t: '1 fps' },
-                { v: 6, t: '6 fps' },
-                { v: 12, t: '12 fps' },
-                { v: 24, t: '24 fps' },
-                { v: 30, t: '30 fps' },
-                { v: 60, t: '60 fps' }
-            ]
+            value: 30,
+            min: 1,
+            max: 240,
+            precision: 3
         });
 
-        speed.on('change', (value: string) => {
-            events.fire('timeline.setFrameRate', parseInt(value, 10));
+        speed.on('change', (value: number) => {
+            events.fire('timeline.setFrameRate', value);
         });
 
         events.on('timeline.frameRate', (frameRate: number) => {
-            speed.value = frameRate.toString();
+            speed.value = frameRate;
         });
 
-        const frames = new NumericInput({
-            id: 'totalFrames',
-            value: 180,
-            min: 1,
-            max: 10000,
+        const startFrame = new NumericInput({
+            id: 'startFrame',
+            value: events.invoke('timeline.startFrame'),
+            min: -1000000,
+            max: 1000000,
             precision: 0
         });
 
-        frames.on('change', (value: number) => {
-            events.fire('timeline.setFrames', value);
+        startFrame.on('change', (value: number) => {
+            const end = events.invoke('timeline.startFrame') + events.invoke('timeline.frames') - 1;
+            events.fire('timeline.setGlobalRange', Math.min(value, end), end);
+        });
+        events.on('timeline.startFrame', (value: number) => {
+            startFrame.value = value;
+        });
+
+        const endFrame = new NumericInput({
+            id: 'endFrame',
+            value: events.invoke('timeline.startFrame') + events.invoke('timeline.frames') - 1,
+            min: -1000000,
+            max: 1000000,
+            precision: 0
+        });
+        endFrame.on('change', (value: number) => {
+            const start = events.invoke('timeline.startFrame');
+            events.fire('timeline.setGlobalRange', start, Math.max(start, value));
+        });
+        const syncEnd = () => {
+            endFrame.value = events.invoke('timeline.startFrame') + events.invoke('timeline.frames') - 1;
+        };
+        events.on('timeline.startFrame', syncEnd);
+        events.on('timeline.frames', syncEnd);
+
+        const frames = new NumericInput({
+            id: 'totalFrames',
+            value: events.invoke('timeline.frames'),
+            min: 1,
+            max: 1000000,
+            precision: 0,
+            enabled: false
         });
 
         events.on('timeline.frames', (framesIn: number) => {
@@ -402,7 +483,8 @@ class TimelinePanel extends Container {
             min: 0,
             max: 1,
             step: 0.05,
-            value: 1
+            value: 1,
+            enabled: false
         });
 
         smoothness.on('change', (value: number) => {
@@ -435,8 +517,18 @@ class TimelinePanel extends Container {
         const settingsControls = new Container({
             id: 'settings-controls'
         });
+        settingsControls.append(cache);
+        settingsControls.append(inputRange);
+        settingsControls.append(globalLabel);
+        settingsControls.append(new Label({ class: 'field-label', text: i18n.t('timeline.fps') }));
         settingsControls.append(speed);
+        settingsControls.append(new Label({ class: 'field-label', text: i18n.t('timeline.start') }));
+        settingsControls.append(startFrame);
+        settingsControls.append(new Label({ class: 'field-label', text: i18n.t('timeline.end') }));
+        settingsControls.append(endFrame);
+        settingsControls.append(new Label({ class: 'field-label', text: i18n.t('timeline.count') }));
         settingsControls.append(frames);
+        settingsControls.append(new Label({ class: 'field-label', text: i18n.t('timeline.smooth') }));
         settingsControls.append(smoothness);
         settingsControls.append(loop);
 
@@ -493,6 +585,10 @@ class TimelinePanel extends Container {
         // Sync play button icon when playing state changes (e.g. via keyboard shortcut)
         events.on('timeline.playing', (isPlaying: boolean) => {
             play.text = isPlaying ? '\uE135' : '\uE131';
+        });
+
+        events.on('sequence.cacheStatus', (status: { loading: boolean }) => {
+            play.enabled = !status.loading;
         });
 
         addKey.on('click', () => {
@@ -572,6 +668,9 @@ class TimelinePanel extends Container {
         tooltips.register(addKey, tooltip('tooltip.timeline.add-key', 'track.addKey'), 'top');
         tooltips.register(removeKey, tooltip('tooltip.timeline.remove-key', 'track.removeKey'), 'top');
         tooltips.register(speed, () => i18n.t('tooltip.timeline.frame-rate'), 'top');
+        tooltips.register(cache, () => i18n.t('tooltip.timeline.cache'), 'top');
+        tooltips.register(startFrame, () => i18n.t('tooltip.timeline.start-frame'), 'top');
+        tooltips.register(endFrame, () => i18n.t('timeline.end'), 'top');
         tooltips.register(frames, () => i18n.t('tooltip.timeline.total-frames'), 'top');
         tooltips.register(smoothness, () => i18n.t('tooltip.timeline.smoothness'), 'top');
         tooltips.register(loop, () => i18n.t('tooltip.timeline.loop'), 'top');

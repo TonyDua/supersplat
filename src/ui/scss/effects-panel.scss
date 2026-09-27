@@ -1,0 +1,35 @@
+@use 'colors.scss' as *;
+
+#effects-panel {
+    .effects-panel-close {
+        width: 24px;
+        height: 24px;
+        margin: 0 8px 0 auto;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: $clr-default;
+        font-size: 20px;
+        line-height: 20px;
+
+        &:hover { color: $clr-hilight; }
+    }
+
+    .effects-panel-note {
+        display: block;
+        margin: 10px 12px 8px;
+        color: $clr-disabled;
+        line-height: 1.4;
+        white-space: normal;
+    }
+
+    .effects-panel-seed {
+        width: 72px;
+        margin: 0;
+    }
+
+    .effects-panel-reset {
+        margin: 12px 10px 4px;
+        height: 28px;
+    }
+}

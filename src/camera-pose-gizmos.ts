@@ -51,8 +51,8 @@ class CameraPoseGizmos extends Element {
             vertexWGSL: vertexShader,
             fragmentWGSL: fragmentShader
         });
-        this.material.depthWrite = true;
-        this.material.depthTest = true;
+        this.material.depthWrite = false;
+        this.material.depthTest = false;
         this.material.update();
 
         this.mesh = new Mesh(device);
@@ -69,7 +69,7 @@ class CameraPoseGizmos extends Element {
         this.entity = new Entity('cameraPoseGizmos');
         this.entity.addComponent('render', {
             meshInstances: [this.meshInstance],
-            layers: [scene.worldLayer.id]
+            layers: [scene.gizmoLayer.id]
         });
 
         scene.app.root.addChild(this.entity);
@@ -77,7 +77,7 @@ class CameraPoseGizmos extends Element {
         // mark dirty when poses or scene bound change
         const markDirty = () => {
             this.dirty = true;
-            if (scene.events.invoke('camera.showPoses')) {
+            if ((scene.events.invoke('camera.scenePoses') as unknown[]).length > 0) {
                 scene.forceRender = true;
             }
         };
@@ -88,6 +88,9 @@ class CameraPoseGizmos extends Element {
         events.on('track.keyUpdated', markDirty);
         events.on('track.keysCleared', markDirty);
         events.on('track.keysLoaded', markDirty);
+        events.on('camera.sets', markDirty);
+        events.on('camera.showPoses', markDirty);
+        events.on('timeline.frame', markDirty);
         events.on('scene.boundChanged', markDirty);
     }
 
@@ -97,7 +100,9 @@ class CameraPoseGizmos extends Element {
 
     onPreRender() {
         const { scene } = this;
-        const visible = scene.events.invoke('camera.showPoses') && scene.camera.renderOverlays;
+        const visible = scene.camera.renderOverlays &&
+            ((scene.events.invoke('camera.scenePoses') as unknown[]).length > 0 ||
+                (scene.events.invoke('camera.showPoses') && (scene.events.invoke('camera.poses') as unknown[]).length > 0));
 
         if (visible && this.dirty) {
             this.dirty = false;
@@ -111,15 +116,18 @@ class CameraPoseGizmos extends Element {
     }
 
     private rebuildMesh() {
-        const poses = this.scene.events.invoke('camera.poses') as { position: Vec3, target: Vec3 }[];
+        const poses = this.scene.events.invoke('camera.scenePoses') as { position: Vec3, target: Vec3 }[];
+        if (this.scene.events.invoke('camera.showPoses')) {
+            poses.push(...this.scene.events.invoke('camera.poses') as { position: Vec3, target: Vec3 }[]);
+        }
         if (!poses || poses.length === 0) {
             this.mesh.primitive[0].count = 0;
             return;
         }
 
-        const depth = 0.08;
-        const halfW = 0.06;
-        const halfH = 0.04;
+        const depth = Math.max(0.35, this.scene.camera.sceneRadius * 0.15);
+        const halfW = depth * 0.75;
+        const halfH = depth * 0.5;
 
         const numVerts = poses.length * VERTS_PER_CAMERA;
         const positions: number[] = [];
@@ -172,12 +180,12 @@ class CameraPoseGizmos extends Element {
             pushLine(tmpTR, tmpUpTip);
         }
 
-        // fill vertex colors with cyan (0, 255, 255, 255)
+        // bright enough to read against the splat and grid in perspective view
         for (let i = 0; i < numVerts; i++) {
             const off = i * 4;
-            colors[off] = 0;
-            colors[off + 1] = 255;
-            colors[off + 2] = 255;
+            colors[off] = 255;
+            colors[off + 1] = 160;
+            colors[off + 2] = 32;
             colors[off + 3] = 255;
         }
 

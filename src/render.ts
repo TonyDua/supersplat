@@ -351,6 +351,11 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             let muxerWrites = Promise.resolve();
 
             try {
+                // Stop interactive playback before preparing the first offline
+                // frame, then drain any viewport sequence swap already in flight.
+                events.fire('timeline.setPlaying', false);
+                await events.invoke('plysequence.beginOffline');
+
                 const { startFrame, endFrame, frameRate, width, height, bitrate, transparentBg, showDebug, format, codec: codecChoice, projection, levelHorizon } = videoSettings;
 
                 const is360 = projection === 'equirect';
@@ -470,7 +475,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     events.fire('timeline.time', frameTime);
 
                     // Wait for PLY sequence to load the frame if present
-                    const newSplat = await events.invoke('plysequence.setFrameAsync', Math.floor(frameTime)) as Splat | null;
+                    const newSplat = await events.invoke('plysequence.setFrameAsync', Math.floor(frameTime + 1e-6)) as Splat | null;
 
                     // manually update the camera so position and rotation are correct
                     scene.camera.onUpdate(0);
@@ -555,7 +560,9 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 const animFrameRate = events.invoke('timeline.frameRate');
                 const duration = (endFrame - startFrame) / animFrameRate;
-                const totalFrames = Math.floor(duration * frameRate) + 1;
+                // Include the source end frame even when the export rate does
+                // not land exactly on its timestamp.
+                const totalFrames = Math.ceil(duration * frameRate - 1e-6) + 1;
 
                 // work objects for 360 capture
                 const camPos = new Vec3();
@@ -618,7 +625,9 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     await encodeFrame(frameTime);
                 };
 
-                for (let frameTime = 0; frameTime <= duration; frameTime += 1.0 / frameRate) {
+                for (let frameIndex = 0; frameIndex < totalFrames; frameIndex++) {
+                    const frameTime = frameIndex / frameRate;
+                    const sourceFrameTime = startFrame + Math.min(frameTime, duration) * animFrameRate;
                     // check for cancellation
                     if (cancelled) break;
 
@@ -629,12 +638,12 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                         scene.camera.fov = savedFov;
 
                         // prepare the frame (loads PLY if needed, updates camera)
-                        await prepareFrame(startFrame + frameTime * animFrameRate, true);
+                        await prepareFrame(sourceFrameTime, true);
 
                         await capture360(frameTime);
                     } else {
                         // prepare the frame (loads PLY if needed, updates camera, sorts)
-                        await prepareFrame(startFrame + frameTime * animFrameRate);
+                        await prepareFrame(sourceFrameTime);
 
                         // render a frame
                         scene.lockedRender = true;
@@ -647,7 +656,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                         events.fire('progressUpdate', {
                             text: i18n.t('panel.render.rendering', { ellipsis: true }),
-                            progress: 100 * frameTime / duration
+                            progress: 100 * (frameIndex + 1) / totalFrames
                         });
                     }
                 }
@@ -728,6 +737,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 });
                 return false;
             } finally {
+                events.fire('plysequence.endOffline');
                 if (encoder && encoder.state !== 'closed') {
                     encoder.close();
                 }

@@ -300,6 +300,9 @@ class SettingsPanel extends Container {
                 setVisible(false);
             }
         });
+        events.on('effectsPanel.visible', (visible: boolean) => {
+            if (visible) setVisible(false);
+        });
 
         // sh bands
 

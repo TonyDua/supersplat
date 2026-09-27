@@ -317,6 +317,19 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     });
 
+    events.on('camera.focusSelected', () => {
+        const pose = events.invoke('camera.selectedPose') as { position: Vec3 } | null;
+        if (!pose) return;
+        const sets = events.invoke('camera.sets') as { lookThrough: boolean };
+        if (sets.lookThrough) events.fire('camera.setActiveSet', -1);
+        events.fire('camera.setControlMode', 'orbit');
+        scene.camera.focus({
+            focalPoint: pose.position,
+            radius: Math.max(scene.camera.sceneRadius * 0.1, 0.35),
+            speed: 1
+        });
+    });
+
     // pivot.reset
 
     // reset the selection's local frame back to the model's own frame, or,
@@ -1352,10 +1365,18 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         scene.camera.setPose(pose.position, pose.target, speed);
     });
 
+    events.on('camera.setTrackedPose', (pose: { position: Vec3, rotation: Quat, fov?: number,
+        lens?: { nearClip?: number, farClip?: number, filmOffsetX?: number, filmOffsetY?: number,
+            filmBackWidth?: number, filmBackHeight?: number } }) => {
+        scene.camera.setTrackedPose(pose);
+        if (pose.fov !== undefined) events.fire('camera.fov', pose.fov);
+    });
+
     // looking through a camera set locks navigation, so the shot camera stays
     // exactly where its animation puts it
     events.on('camera.sets', (state: { lookThrough: boolean }) => {
         scene.camera.locked = state.lookThrough;
+        if (!state.lookThrough) scene.camera.setTrackedPose(null);
     });
 
     // hack: fire events to initialize UI

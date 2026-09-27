@@ -299,13 +299,14 @@ class PublishSettingsDialog extends Container {
 
         this.show = (userStatus: UserStatus) => {
             const frames = events.invoke('timeline.frames');
+            const startFrame = events.invoke('timeline.startFrame');
             const frameRate = events.invoke('timeline.frameRate');
             const smoothness = events.invoke('timeline.smoothness');
 
             // get poses
             const orderedPoses = (events.invoke('camera.poses') as Pose[])
             .slice()
-            .filter(p => p.frame >= 0 && p.frame < frames)
+            .filter(p => p.frame >= startFrame && p.frame < startFrame + frames)
             .sort((a, b) => a.frame - b.frame);
 
             // overwrite options
@@ -340,7 +341,7 @@ class PublishSettingsDialog extends Container {
                         const fovKeys: number[] = [];
                         for (let i = 0; i < orderedPoses.length; ++i) {
                             const op = orderedPoses[i];
-                            times.push(op.frame);
+                            times.push(op.frame - startFrame);
                             position.push(op.position.x, op.position.y, op.position.z);
                             target.push(op.target.x, op.target.y, op.target.z);
                             fovKeys.push(op.fov);

@@ -29,6 +29,7 @@ import {
     RenderPassForward,
     RenderTarget,
     Texture,
+    Vec2,
     Vec3,
     Vec4
 } from 'playcanvas';
@@ -127,6 +128,12 @@ class Camera extends Element {
     // update (used by 360 capture to render arbitrary face orientations that
     // the azim/elev pose system cannot express)
     poseOverride: { position: Vec3, rotation: Quat, fov: number, near: number, far: number } | null = null;
+
+    // A shot camera is a true world-space camera, including roll and its
+    // authored clipping planes. The free editor camera keeps its own orbit pose.
+    trackedPose: { position: Vec3, rotation: Quat, fov?: number,
+        lens?: { nearClip?: number, farClip?: number, filmOffsetX?: number,
+            filmOffsetY?: number, filmBackWidth?: number, filmBackHeight?: number } } | null = null;
 
     // world transform of the user-facing camera pose. while a pose override
     // is active this holds the last tween-driven pose, so ui elements (view
@@ -307,6 +314,11 @@ class Camera extends Element {
     // splat sorting and rendering see the new transform
     setPoseOverride(override: Camera['poseOverride']) {
         this.poseOverride = override;
+        this.onUpdate(0);
+    }
+
+    setTrackedPose(pose: Camera['trackedPose']) {
+        this.trackedPose = pose;
         this.onUpdate(0);
     }
 
@@ -658,7 +670,7 @@ class Camera extends Element {
             this.warpTarget?.resize(width, height);
         }
 
-        this.camera.horizontalFov = width > height;
+        this.camera.horizontalFov = this.trackedPose ? true : width > height;
         this.camera.aspectRatio = width / height;
         scene.events.fire('camera.resize', { width, height });
     }
@@ -696,7 +708,25 @@ class Camera extends Element {
             this.camera.fov = fov;
             this.near = near;
             this.far = far;
+        } else if (this.trackedPose) {
+            const { position, rotation, fov, lens } = this.trackedPose;
+            this.mainCamera.setLocalPosition(position);
+            this.mainCamera.setLocalRotation(rotation);
+            this.camera.horizontalFov = true;
+            if (fov !== undefined) this.camera.fov = fov;
+            this.camera.projectionOffset = new Vec2(
+                lens?.filmBackWidth ? 2 * (lens.filmOffsetX ?? 0) / lens.filmBackWidth : 0,
+                lens?.filmBackHeight ? 2 * (lens.filmOffsetY ?? 0) / lens.filmBackHeight : 0
+            );
+            this.fitClippingPlanes(position, this.mainCamera.forward);
+            if (lens?.nearClip && lens?.farClip && lens.farClip > lens.nearClip) {
+                this.near = lens.nearClip;
+                this.far = lens.farClip;
+            }
+            this.displayTransform.copy(this.mainCamera.getWorldTransform());
         } else {
+            this.camera.horizontalFov = this.targetSize.width > this.targetSize.height;
+            this.camera.projectionOffset = Vec2.ZERO;
             this.mainCamera.setLocalPosition(cameraPosition);
             this.mainCamera.setLocalEulerAngles(azimElev.elev, azimElev.azim, 0);
 

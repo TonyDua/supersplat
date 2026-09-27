@@ -579,7 +579,8 @@ class ExportPopup extends Container {
             saveIcon.hidden = !saveProject;
 
             const frames = events.invoke('timeline.frames');
-            const hasPoses = (events.invoke('camera.poses') as Pose[]).some(p => p.frame >= 0 && p.frame < frames);
+            const startFrame = events.invoke('timeline.startFrame');
+            const hasPoses = (events.invoke('camera.poses') as Pose[]).some(p => p.frame >= startFrame && p.frame < startFrame + frames);
 
             reset(exportType, splatNames, hasPoses);
 

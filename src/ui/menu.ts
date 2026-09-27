@@ -2,7 +2,6 @@ import { Container, Element, Label } from '@playcanvas/pcui';
 
 import { Events } from '../events';
 import { ExportChoices } from '../export-options';
-import { requestNavigateHome } from '../iframe-api';
 import { recentFiles, recentImports, RecentStore } from '../recent-files';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
@@ -17,7 +16,6 @@ import sceneImport from './svg/import.svg';
 import logoSvg from './svg/logo.svg';
 import sceneNew from './svg/new.svg';
 import sceneOpen from './svg/open.svg';
-import scenePublish from './svg/publish.svg';
 import sceneSave from './svg/save.svg';
 import selectAll from './svg/select-all.svg';
 import selectDuplicate from './svg/select-duplicate.svg';
@@ -124,7 +122,7 @@ class Menu extends Container {
         arrow.dom.setAttribute('id', 'menu-arrow');
         arrow.dom.addEventListener('click', toggleCollapsed);
 
-        // SuperSplat home: leftmost, before File. Mark + wordmark; the
+        // SuperSplat brand: leftmost, before File. Mark + wordmark; the
         // wordmark hides when the menubar is collapsed.
         const logo = createSvg(logoSvg);
         logo.dom.setAttribute('id', 'menu-logo');
@@ -137,17 +135,7 @@ class Menu extends Container {
         const home = new Container({
             id: 'menu-home'
         });
-        home.dom.setAttribute('role', 'link');
-        home.dom.setAttribute('tabindex', '0');
         home.dom.setAttribute('aria-label', 'SuperSplat');
-        home.dom.setAttribute('title', 'SuperSplat');
-        home.dom.addEventListener('click', requestNavigateHome);
-        home.dom.addEventListener('keydown', (event: KeyboardEvent) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                requestNavigateHome();
-            }
-        });
         home.append(logo);
         home.append(wordmark);
 
@@ -266,13 +254,6 @@ class Menu extends Container {
             extra: shortcutManager.formatShortcut('scene.reexport'),
             isEnabled: () => !!lastExport && !events.invoke('scene.empty'),
             onSelect: () => events.fire('scene.reexport')
-        }, {
-            // separator
-        }, {
-            text: () => i18n.t('menu.file.publish', { ellipsis: true }),
-            icon: createSvg(scenePublish),
-            isEnabled: () => !events.invoke('scene.empty'),
-            onSelect: async () => await events.invoke('show.publishSettingsDialog')
         }]);
 
         // track undo/redo availability for menu item enablement

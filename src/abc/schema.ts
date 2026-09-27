@@ -168,7 +168,7 @@ class XformSchema {
         // ops apply in order, each pre-multiplying the accumulated matrix; the
         // stored byte packs the op type in the high nibble and its hint in the
         // low one
-        let result = identityMatrix();
+        let result: Mat4 = identityMatrix();
         let at = 0;
         for (let i = 0; i < ops.length; ++i) {
             const op = ops[i] >> 4;
@@ -211,6 +211,23 @@ class CameraSchema {
 
     coreAt(index: number): Float64Array | null {
         return this.coreProperty.header.numSamples === 1 ? this.coreValues : this.coreProperty.readNumbers(index);
+    }
+
+    lensAt(index: number) {
+        const core = this.coreAt(index);
+        if (!core || core.length < 16) return {};
+        return {
+            focalLength: core[0],
+            filmBackWidth: core[1] * 10,
+            filmBackHeight: core[3] * 10,
+            filmOffsetX: core[2] * 10,
+            filmOffsetY: core[4] * 10,
+            lensSqueeze: core[5],
+            fStop: core[10],
+            focusDistance: core[11],
+            nearClip: core[14],
+            farClip: core[15]
+        };
     }
 
     /**

@@ -58,14 +58,56 @@
                 gap: 1px;
                 margin-right: 1px;
 
+                > .field-label {
+                    color: $clr-disabled;
+                    font-size: 11px;
+                    margin: 0 3px 0 6px;
+                    white-space: nowrap;
+                }
+
                 > #speed {
                     margin: 0;
                     width: 80px;
                 }
 
+                > #input-range {
+                    color: $clr-disabled;
+                    font-size: 11px;
+                    white-space: nowrap;
+                    margin-right: 8px;
+                }
+
+                > #global-range {
+                    color: $clr-default;
+                    font-size: 11px;
+                    margin-right: 4px;
+                }
+
+                > #sequence-cache {
+                    width: 82px;
+                    height: 24px;
+                    margin: 0 5px 0 0;
+                    padding: 0 4px;
+                    border-radius: 4px;
+                    white-space: nowrap;
+
+                    &.active {
+                        color: #63cf83;
+                        border-color: #397b4c;
+                    }
+
+                }
+
+                > #startFrame,
+                > #endFrame,
                 > #totalFrames {
                     margin: 0;
-                    width: 80px;
+                    width: 68px;
+                }
+
+                > #totalFrames,
+                > #smoothness {
+                    opacity: 0.55;
                 }
 
                 > #smoothness {
@@ -127,6 +169,15 @@
             width: 100%;
             height: 100%;
 
+            > .sequence-cache-range {
+                position: absolute;
+                top: 2px;
+                height: 3px;
+                border-radius: 2px;
+                background: #56d279;
+                pointer-events: none;
+            }
+
             > .time-tick {
                 position: absolute;
                 bottom: 1px;
@@ -166,10 +217,9 @@
                     cursor: pointer;
                     pointer-events: auto;
 
-                    // keys stranded beyond the timeline's end: pinned just past
-                    // the strip, error-tinted and dimmed - present but not playing
+                    // Source handles outside the Global range remain valid.
                     &.out-of-range {
-                        background-color: $error;
+                        background-color: $clr-disabled;
                         opacity: 0.7;
                     }
                 }
